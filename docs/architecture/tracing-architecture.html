@@ -47,7 +47,7 @@
     <div class="diagram" role="region" aria-label="可横向滚动的系统架构图" tabindex="0">
       <svg viewBox="0 0 1120 528" role="img" aria-labelledby="tracing-architecture-title tracing-architecture-desc" xmlns="http://www.w3.org/2000/svg">
         <title id="tracing-architecture-title">Agent Tracing 采集、审计与查询</title>
-        <desc id="tracing-architecture-desc">Agent SDK 上报运行遥测并另行调用工具网关，网关及确认服务持久化审计，投影合并两路证据，控制台经授权查询读取 Trace。</desc>
+        <desc id="tracing-architecture-desc">Agent SDK 上报运行遥测并另行调用工具网关，网关及确认服务持久化审计，投影合并两路数据，控制台经授权读取 Trace 或按调用 ID 查证。</desc>
         <defs>
           <marker id="tracing-architecture-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#42605e"/>
@@ -67,6 +67,7 @@
           <path class="path async" d="M 700 224 V 176"/>
           <path class="path" d="M 800 132 H 884"/>
           <path class="path" d="M 228 404 H 600"/>
+          <path class="path" d="M 700 360 V 312"/>
           <path class="path" d="M 800 404 H 968 Q 976 404 976 396 V 176"/>
         </g>
         <g class="label" text-anchor="middle">
@@ -77,14 +78,15 @@
           <text x="736" y="205">重放</text>
           <text x="842" y="123">更新视图</text>
           <text x="414" y="395">列表、调用树、详情</text>
+          <text x="762" y="341">按调用 ID 查证</text>
           <text x="888" y="395">项目与权限过滤</text>
         </g>
 
         <g class="node">
           <rect x="44" y="88" width="184" height="88" rx="8"/>
           <text class="name" x="60" y="117">Agent 应用与 SDK</text>
-          <text class="detail" x="60" y="143">轮次、LLM、并行子 Agent</text>
-          <text class="detail" x="60" y="162">携带已登记的追踪上下文</text>
+          <text class="detail" x="60" y="143">LLM 调用与并行子 Agent</text>
+          <text class="detail" x="60" y="162">可信入口登记轮次与 Trace</text>
         </g>
         <g class="node focus">
           <rect x="316" y="88" width="200" height="88" rx="8"/>
@@ -95,7 +97,7 @@
         <g class="node">
           <rect x="316" y="224" width="200" height="88" rx="8"/>
           <text class="name" x="332" y="253">工具网关与确认服务</text>
-          <text class="detail" x="332" y="279">决策、确认、执行结果</text>
+          <text class="detail" x="332" y="279">决策、确认、下游执行回执</text>
           <text class="detail" x="332" y="298">按平台调用 ID 关联</text>
         </g>
         <g class="node focus">
