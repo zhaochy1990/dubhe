@@ -43,11 +43,11 @@
 <body>
   <main>
     <h1>Agent Tracing 系统架构</h1>
-    <p>OTLP Span 直接写入 Tracing MySQL。Tooling Gateway 独立执行，审计事件异步补充工具节点。</p>
+    <p>SDK 上报客户端工具 Span，网关独立记录审计。Tracing 核对 call_id 和追踪上下文，匹配后在调用树中展示同一个工具节点。</p>
     <div class="diagram" role="region" aria-label="可横向滚动的系统架构图" tabindex="0">
       <svg viewBox="0 0 1120 528" role="img" aria-labelledby="tracing-architecture-title tracing-architecture-desc" xmlns="http://www.w3.org/2000/svg">
         <title id="tracing-architecture-title">Agent Tracing 采集、审计与查询</title>
-        <desc id="tracing-architecture-desc">OTLP 接入直接写入 Tracing MySQL，Tooling Gateway 在自己的库中保存审计，Tracing 消费 Outbox 事件生成工具节点，控制台从 Tracing 库查询。</desc>
+        <desc id="tracing-architecture-desc">SDK 通过 OTLP 上报工具 Span 的父节点、客户端耗时及响应状态，网关返回 call_id 并通过 Outbox 提供策略、确认和执行证据。Tracing 核对关联后展示同一个工具节点，只有 SDK 时展示客户端记录。</desc>
         <defs>
           <marker id="tracing-architecture-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#42605e"/>
@@ -63,17 +63,18 @@
 
         <g marker-end="url(#tracing-architecture-arrow)">
           <path class="path" d="M 228 132 H 624"/>
-          <path class="path" d="M 228 160 H 256 Q 264 160 264 168 V 224 Q 264 232 272 232 H 312"/>
+          <path class="path" d="M 228 160 H 256 Q 264 160 264 168 V 224 Q 264 232 272 232 H 312" marker-start="url(#tracing-architecture-arrow)"/>
           <path class="path" d="M 420 276 V 300"/>
           <path class="path" d="M 824 132 H 876"/>
           <path class="path async" d="M 528 336 H 572 Q 580 336 580 328 V 304 Q 580 296 588 296 H 624"/>
           <path class="path" d="M 824 296 H 840 Q 848 296 848 288 V 168 Q 848 160 856 160 H 876"/>
           <path class="path" d="M 228 404 H 876"/>
-          <path class="path" d="M 970 360 V 176"/>
+          <path class="path" d="M 970 348 V 176"/>
         </g>
         <g class="label" text-anchor="middle">
-          <text x="424" y="123">OTLP/HTTP Trace</text>
+          <text x="424" y="123">OTLP/HTTP Trace（含工具 Span）</text>
           <text x="270" y="257">工具请求</text>
+          <text x="270" y="276">返回 call_id</text>
           <text x="467" y="293">同事务写入</text>
           <text x="850" y="123">直写</text>
           <text x="585" y="360">异步消费</text>
@@ -83,10 +84,11 @@
         </g>
 
         <g class="node">
-          <rect x="44" y="88" width="184" height="88" rx="8"/>
+          <rect x="44" y="88" width="184" height="108" rx="8"/>
           <text class="name" x="60" y="117">Agent 应用与 SDK</text>
-          <text class="detail" x="60" y="143">LLM 调用和并行子 Agent</text>
-          <text class="detail" x="60" y="162">工具调用拓扑和客户端耗时</text>
+          <text class="detail" x="60" y="143">Agent、LLM 和工具 Span</text>
+          <text class="detail" x="60" y="162">父节点、耗时与响应状态</text>
+          <text class="detail" x="60" y="181">记录网关返回的 call_id</text>
         </g>
         <g class="node focus">
           <rect x="624" y="88" width="200" height="88" rx="8"/>
@@ -97,8 +99,8 @@
         <g class="node">
           <rect x="312" y="188" width="216" height="88" rx="8"/>
           <text class="name" x="328" y="217">网关、执行器与确认</text>
-          <text class="detail" x="328" y="243">决策、确认、下游执行回执</text>
-          <text class="detail" x="328" y="262">签发平台调用 ID</text>
+          <text class="detail" x="328" y="243">策略决策、确认、执行回执</text>
+          <text class="detail" x="328" y="262">生成并返回 call_id</text>
         </g>
         <g class="node">
           <rect x="312" y="300" width="216" height="72" rx="8"/>
@@ -108,7 +110,7 @@
         <g class="node">
           <rect x="624" y="252" width="200" height="88" rx="8"/>
           <text class="name" x="640" y="281">审计事件消费者</text>
-          <text class="detail" x="640" y="307">按调用 ID 建立工具节点</text>
+          <text class="detail" x="640" y="307">按 call_id 建立工具主节点</text>
           <text class="detail" x="640" y="326">归并决策、确认和执行状态</text>
         </g>
         <g class="node focus">
@@ -124,10 +126,11 @@
           <text class="detail" x="60" y="434">Session、时间线、调用树</text>
         </g>
         <g class="node">
-          <rect x="876" y="360" width="188" height="88" rx="8"/>
-          <text class="name" x="892" y="389">授权查询</text>
-          <text class="detail" x="892" y="415">租户、环境、项目、Agent</text>
-          <text class="detail" x="892" y="434">查询 Tracing 本库</text>
+          <rect x="876" y="348" width="188" height="108" rx="8"/>
+          <text class="name" x="892" y="377">授权查询</text>
+          <text class="detail" x="892" y="403">租户、环境、项目、Agent</text>
+          <text class="detail" x="892" y="422">匹配后显示同一工具节点</text>
+          <text class="detail" x="892" y="441">仅有 SDK 时显示其记录</text>
         </g>
         <g class="legend">
           <path class="path" d="M 44 500 H 76"/>

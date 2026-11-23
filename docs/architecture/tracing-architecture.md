@@ -32,18 +32,17 @@ Session／Trace／Span 的组织方式与 Langfuse 的 Session／Trace／Observa
 
 ## 3. 系统模块与写入流程
 
-
 ```mermaid
 flowchart LR
-  Agent["可信入口与 Agent SDK"] -->|OTLP/HTTP Trace| Ingest
-  Agent -->|工具请求| Gateway
+  Agent["可信入口与 Agent SDK<br/>父节点、客户端耗时、响应状态"] -->|OTLP/HTTP Trace，含工具 Span| Ingest
+  Agent <-->|工具请求 / 返回 call_id| Gateway
   subgraph Tooling["Tooling Gateway 执行域"]
-    Gateway["网关、执行器与确认服务"] -->|同事务写入| Audit["网关审计与 Outbox"]
+    Gateway["网关、执行器与确认服务<br/>策略决策、确认、执行回执"] -->|同事务写入| Audit["网关审计与 Outbox"]
   end
   subgraph Tracing["Tracing"]
     Ingest["OTLP 接入"] -->|批量写 Span，提交后确认| Store["Tracing MySQL"]
-    Consumer["审计事件消费者"] -->|幂等更新| Store
-    Query["授权查询"] --> Store
+    Consumer["审计事件消费者<br/>按 call_id 建立工具主节点"] -->|幂等更新| Store
+    Query["授权查询<br/>匹配后展示同一工具节点<br/>仅有 SDK 时显示客户端记录"] --> Store
   end
   Audit -.->|异步消费| Consumer
   Console["Agent 观测"] --> Query
