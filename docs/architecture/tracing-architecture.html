@@ -43,11 +43,11 @@
 <body>
   <main>
     <h1>Agent Tracing 系统架构</h1>
-    <p>V1 外部上报仅接收 OTLP/HTTP Trace。执行侧先保存审计证据，再通过内部 Outbox 异步更新控制台视图。</p>
+    <p>OTLP Span 直接写入 Tracing PostgreSQL。Tooling Gateway 独立执行，审计事件异步补充工具节点。</p>
     <div class="diagram" role="region" aria-label="可横向滚动的系统架构图" tabindex="0">
       <svg viewBox="0 0 1120 528" role="img" aria-labelledby="tracing-architecture-title tracing-architecture-desc" xmlns="http://www.w3.org/2000/svg">
         <title id="tracing-architecture-title">Agent Tracing 采集、审计与查询</title>
-        <desc id="tracing-architecture-desc">Agent SDK 通过 OTLP/HTTP 上报 Trace 并另行调用工具网关，网关及确认服务持久化审计，投影合并两路数据，控制台经授权读取 Trace 或按调用 ID 查证。</desc>
+        <desc id="tracing-architecture-desc">OTLP 接入直接写入 Tracing PostgreSQL，Tooling Gateway 在自己的库中保存审计，Tracing 消费 Outbox 事件生成工具节点，控制台从 Tracing 库查询。</desc>
         <defs>
           <marker id="tracing-architecture-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#42605e"/>
@@ -56,67 +56,66 @@
 
         <rect class="zone" x="24" y="28" width="224" height="444" rx="8"/>
         <text class="zone-title" x="44" y="58">平台客户端</text>
-        <rect class="zone" x="288" y="28" width="808" height="444" rx="8"/>
-        <text class="zone-title" x="308" y="58">平台执行与观测</text>
+        <rect class="zone" x="288" y="152" width="272" height="236" rx="8"/>
+        <text class="zone-title" x="308" y="176">Tooling Gateway 执行域</text>
+        <rect class="zone" x="600" y="28" width="496" height="444" rx="8"/>
+        <text class="zone-title" x="620" y="58">Tracing</text>
 
         <g marker-end="url(#tracing-architecture-arrow)">
-          <path class="path" d="M 228 132 H 316"/>
-          <path class="path" d="M 228 160 H 256 Q 264 160 264 168 V 260 Q 264 268 272 268 H 316"/>
-          <path class="path" d="M 516 132 H 600"/>
-          <path class="path" d="M 516 268 H 600"/>
-          <path class="path async" d="M 700 224 V 176"/>
-          <path class="path" d="M 800 132 H 884"/>
-          <path class="path" d="M 228 404 H 600"/>
-          <path class="path" d="M 700 360 V 312"/>
-          <path class="path" d="M 800 404 H 968 Q 976 404 976 396 V 176"/>
+          <path class="path" d="M 228 132 H 624"/>
+          <path class="path" d="M 228 160 H 256 Q 264 160 264 168 V 224 Q 264 232 272 232 H 312"/>
+          <path class="path" d="M 420 276 V 300"/>
+          <path class="path" d="M 824 132 H 876"/>
+          <path class="path async" d="M 528 336 H 572 Q 580 336 580 328 V 304 Q 580 296 588 296 H 624"/>
+          <path class="path" d="M 824 296 H 840 Q 848 296 848 288 V 168 Q 848 160 856 160 H 876"/>
+          <path class="path" d="M 228 404 H 876"/>
+          <path class="path" d="M 970 360 V 176"/>
         </g>
         <g class="label" text-anchor="middle">
-          <text x="272" y="123">OTLP/HTTP</text>
-          <text x="302" y="214">工具请求</text>
-          <text x="558" y="123">遥测批次</text>
-          <text x="558" y="259">事务写入</text>
-          <text x="736" y="205">重放</text>
-          <text x="842" y="123">更新视图</text>
-          <text x="414" y="395">列表、调用树、详情</text>
-          <text x="762" y="341">按调用 ID 查证</text>
-          <text x="888" y="395">项目与权限过滤</text>
+          <text x="424" y="123">OTLP/HTTP Trace</text>
+          <text x="270" y="257">工具请求</text>
+          <text x="467" y="293">同事务写入</text>
+          <text x="850" y="123">直写</text>
+          <text x="585" y="360">异步消费</text>
+          <text x="892" y="246">幂等更新</text>
+          <text x="426" y="395">列表、调用树、详情</text>
+          <text x="1022" y="296">查询</text>
         </g>
 
         <g class="node">
           <rect x="44" y="88" width="184" height="88" rx="8"/>
           <text class="name" x="60" y="117">Agent 应用与 SDK</text>
-          <text class="detail" x="60" y="143">LLM 调用与并行子 Agent</text>
-          <text class="detail" x="60" y="162">可信入口登记轮次与 Trace</text>
+          <text class="detail" x="60" y="143">LLM 调用和并行子 Agent</text>
+          <text class="detail" x="60" y="162">工具调用拓扑和客户端耗时</text>
         </g>
         <g class="node focus">
-          <rect x="316" y="88" width="200" height="88" rx="8"/>
-          <text class="name" x="332" y="117">OTLP Trace 接入</text>
-          <text class="detail" x="332" y="143">验证身份和归属</text>
-          <text class="detail" x="332" y="162">校验脱敏、限流、持久接收</text>
+          <rect x="624" y="88" width="200" height="88" rx="8"/>
+          <text class="name" x="640" y="117">OTLP Trace 接入</text>
+          <text class="detail" x="640" y="143">验证身份与 Trace 归属</text>
+          <text class="detail" x="640" y="162">批量写入，事务提交后确认</text>
         </g>
         <g class="node">
-          <rect x="316" y="224" width="200" height="88" rx="8"/>
-          <text class="name" x="332" y="253">工具网关与确认服务</text>
-          <text class="detail" x="332" y="279">决策、确认、下游执行回执</text>
-          <text class="detail" x="332" y="298">按平台调用 ID 关联</text>
+          <rect x="312" y="188" width="216" height="88" rx="8"/>
+          <text class="name" x="328" y="217">网关、执行器与确认</text>
+          <text class="detail" x="328" y="243">决策、确认、下游执行回执</text>
+          <text class="detail" x="328" y="262">签发平台调用 ID</text>
+        </g>
+        <g class="node">
+          <rect x="312" y="300" width="216" height="72" rx="8"/>
+          <text class="name" x="328" y="329">网关审计与 Outbox</text>
+          <text class="detail" x="328" y="353">执行侧持久化，事件可重放</text>
+        </g>
+        <g class="node">
+          <rect x="624" y="252" width="200" height="88" rx="8"/>
+          <text class="name" x="640" y="281">审计事件消费者</text>
+          <text class="detail" x="640" y="307">按调用 ID 建立工具节点</text>
+          <text class="detail" x="640" y="326">归并决策、确认和执行状态</text>
         </g>
         <g class="node focus">
-          <rect x="600" y="224" width="200" height="88" rx="8"/>
-          <text class="name" x="616" y="253">审计记录与 Outbox</text>
-          <text class="detail" x="616" y="279">执行侧权威证据</text>
-          <text class="detail" x="616" y="298">按来源重放并补齐视图</text>
-        </g>
-        <g class="node">
-          <rect x="600" y="88" width="200" height="88" rx="8"/>
-          <text class="name" x="616" y="117">Trace 投影</text>
-          <text class="detail" x="616" y="143">去重、归并、组树</text>
-          <text class="detail" x="616" y="162">更新摘要与可见性</text>
-        </g>
-        <g class="node">
-          <rect x="884" y="88" width="188" height="88" rx="8"/>
-          <text class="name" x="900" y="117">PostgreSQL 读模型</text>
-          <text class="detail" x="900" y="143">Session / Trace / Span</text>
-          <text class="detail" x="900" y="162">内容单独加密与留存</text>
+          <rect x="876" y="88" width="188" height="88" rx="8"/>
+          <text class="name" x="892" y="117">Tracing PostgreSQL</text>
+          <text class="detail" x="892" y="143">Session / Trace / Span</text>
+          <text class="detail" x="892" y="162">工具节点及审计索引</text>
         </g>
         <g class="node">
           <rect x="44" y="360" width="184" height="88" rx="8"/>
@@ -125,16 +124,16 @@
           <text class="detail" x="60" y="434">Session、时间线、调用树</text>
         </g>
         <g class="node">
-          <rect x="600" y="360" width="200" height="88" rx="8"/>
-          <text class="name" x="616" y="389">授权查询</text>
-          <text class="detail" x="616" y="415">租户、环境、项目、Agent</text>
-          <text class="detail" x="616" y="434">内容独立鉴权与访问审计</text>
+          <rect x="876" y="360" width="188" height="88" rx="8"/>
+          <text class="name" x="892" y="389">授权查询</text>
+          <text class="detail" x="892" y="415">租户、环境、项目、Agent</text>
+          <text class="detail" x="892" y="434">查询 Tracing 本库</text>
         </g>
         <g class="legend">
           <path class="path" d="M 44 500 H 76"/>
-          <text x="84" y="505">调用或数据流</text>
-          <path class="path async" d="M 200 500 H 232"/>
-          <text x="240" y="505">异步投影</text>
+          <text x="84" y="505">调用或数据库写入</text>
+          <path class="path async" d="M 236 500 H 268"/>
+          <text x="276" y="505">异步审计事件</text>
         </g>
       </svg>
     </div>
