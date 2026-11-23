@@ -196,7 +196,7 @@ SDK 使用标准上下文传播和 OTLP exporter。V1 配置完整的 Trace URL 
 
 **拟定的 HTTP 适配。** 由网关在已分配调用 ID 后的业务响应中设置 `x-dubhe-call-id`。SDK 通过工具客户端适配器读取，适用于正常响应、策略拒绝或待确认等已形成调用记录的响应。代理转发时保留该头。没有可信响应头时调用 ID 为空。其他消费方式可复用相同的业务语义，通过适配器把可信响应元数据转成 `recordResponse()`。
 
-网关从已验证的 `traceparent.parent-id` 获取 `ToolCall.span_id`。SDK 把响应中的调用 ID 记在工具 Span 的 `metadata.client_call_id`。合并时核对归属、可信 Trace、执行 Agent、`call_id` 和 SDK Span ID。匹配后的网关主节点按 SDK Span 的 `parent_span_id` 挂树。同一幂等键的请求重试沿用原 `call_id`，重新创建客户端工具 Span 时则生成新的 `span_id`。如果重试拿回原 `call_id` 而 Span ID 不匹配，仍显示为单独的客户端尝试。只有网关再次发起下游执行时才新增 `ExecutionAttempt`。
+网关从已验证的 `traceparent.parent-id` 获取 `ToolCall.span_id`。SDK 把响应中的调用 ID 记在工具 Span 的 `metadata.client_call_id`。合并时核对归属、可信 Trace、执行 Agent、`call_id` 和 SDK Span ID。匹配后的网关主节点按 SDK Span 的 `parent_span_id` 挂树。同一幂等键的请求重试沿用原 `call_id`，重新创建客户端工具 Span 时则生成新的 `span_id`。如果重试拿回原 `call_id` 而 Span ID 不匹配，仍显示为单独的客户端尝试。网关为新的下游执行在转发前持久化 `ExecutionAttempt`。如果只是返回旧状态，沿用已有执行记录。
 
 ```ts
 declare const tracing: TracingSdk
@@ -227,11 +227,11 @@ export async function runTurn() {
 
 真实业务客户端按既有接口附加其认证和业务数据，并在 HTTP 错误映射成应用异常前先提取响应元数据。若已经记录响应，SDK 保留该客户端响应状态，同时可标记回调结束后的应用异常。本地和直连工具的记录采用客户端状态。网关工具的 `ToolCall.parameters` 由执行侧审计提供。并行子 Agent 以同一个 `TraceContext` 分别调用 `withAgent`。
 
-模型适配器在发出请求前用 `recordRequest` 记录最终模型名、采样参数和实际输入。单独传给模型的 System Prompt 放入 `systemInstructions`，消息中的 System Prompt、User Prompt 和历史消息按发送顺序记录到 `messages`。适配器用 `recordUsage` 写入已知 Token 数。输入采集须同时满足 SDK 的 `captureModelInputs` 开关与服务端项目、环境策略。任一侧未开启时，只保留模型名、采样参数和用量等非原文数据。
+模型适配器在发出请求前用 `recordRequest` 传入最终模型名、采样参数和实际输入。单独传给模型的 System Prompt 放入 `systemInstructions`，消息中的 System Prompt、User Prompt 和历史消息按发送顺序记录到 `messages`。适配器用 `recordUsage` 写入已知 Token 数。SDK 的 `captureModelInputs` 关闭时不缓存或发送原文。接入端按项目和环境策略独立校验，关闭时也立即停止返回原文详情。接入端根据可信目录验证请求模型名并保存规范名，无法验证的名称不写入摘要。
 
 ## 4. V1 Span 属性与逻辑映射
 
-Dubhe 用 `dubhe.*` 属性传输自己的业务语义。跨进程身份通过认证与可信登记校验。结构化字段来自允许的枚举或目录。已开启采集的模型输入只通过指定内容属性上报。模型回复原文、工具返回原文、认证头、异常栈及任意自定义属性无需采集。模型参数不可得时保持缺失。
+Dubhe 用 `dubhe.*` 属性传输自己的业务语义。跨进程身份通过认证与可信登记校验。结构化字段来自允许的枚举或目录。已开启采集的模型输入只通过指定内容属性上报，实际发出的历史消息可能包含前序模型回复和工具结果。当前调用的独立输出、认证头、异常栈及任意自定义属性不采集。模型参数不可得时保持缺失。
 
 | Span 属性 | 用途与类型 | Span 逻辑属性 |
 | --- | --- | --- |
@@ -240,7 +240,7 @@ Dubhe 用 `dubhe.*` 属性传输自己的业务语义。跨进程身份通过认
 | `dubhe.span.kind` | `run`、`agent`、`llm`、`tool_client` | `kind` |
 | `dubhe.agent.id` | 本 Span 声明的执行 Agent，入站须匹配生产者授权 | `agent_id` |
 | `dubhe.run.outcome` | 根 Span 的显式终态 | `metadata.run_outcome` |
-| `dubhe.model.id`、`gen_ai.request.model` | 可信目录模型 ID、最终请求的模型名 | `metadata.model_id`、`metadata.model_name` |
+| `dubhe.model.id`、`gen_ai.request.model` | 可信目录模型 ID、与目录匹配的最终请求模型名 | `metadata.model_id`、`metadata.model_name` |
 | `gen_ai.usage.input_tokens`、`gen_ai.usage.output_tokens` | 已知输入及输出计数 | `metadata.input_tokens`、`metadata.output_tokens` |
 | `gen_ai.request.max_tokens`、`gen_ai.request.temperature` | 已知输出上限和采样参数 | `metadata.max_output_tokens`、`metadata.temperature` |
 | `gen_ai.system_instructions`、`gen_ai.input.messages` | 独立的 System Prompt 和按顺序发送的输入消息 | `metadata.system_instructions`、`metadata.messages` |
