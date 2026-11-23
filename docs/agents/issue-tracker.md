@@ -26,7 +26,7 @@ Use `gh` with `--repo zhaochy1990/dubhe` for tracker operations.
   `gh label list` and create it with `gh label create <name>` if missing.
 - Track a map in an issue labelled `wayfinder:map`.
 - Link tickets as sub-issues and label each `wayfinder:<type>`.
-- Choose the first open, unassigned child whose blockers are closed.
-  Claim it with `gh issue edit <number> --add-assignee @me`.
+- In map order, choose the first open, unassigned child whose blockers
+  are closed. Claim it with `gh issue edit <number> --add-assignee @me`.
 - To resolve a ticket, post the answer, close the issue, and link the
   outcome under Decisions so far in the map.

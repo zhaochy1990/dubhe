@@ -6,7 +6,7 @@ Read `docs/agents/issue-tracker.md` when reading, publishing, or updating work i
 
 ### Triage labels
 
-Read `docs/agents/triage-labels.md` when assigning a triage label.
+Read `docs/agents/triage-labels.md` when querying or updating issue triage state.
 
 ### Domain docs
 
