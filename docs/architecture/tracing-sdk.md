@@ -198,6 +198,8 @@ SDK 使用标准上下文传播和 OTLP exporter。V1 配置完整的 Trace URL 
 
 网关从已验证的 `traceparent.parent-id` 获取 `ToolCall.span_id`。SDK 把响应中的调用 ID 记在工具 Span 的 `metadata.client_call_id`。合并时核对归属、可信 Trace、执行 Agent、`call_id` 和 SDK Span ID。匹配后的网关主节点按 SDK Span 的 `parent_span_id` 挂树。同一幂等键的请求重试沿用原 `call_id`，重新创建客户端工具 Span 时则生成新的 `span_id`。如果重试拿回原 `call_id` 而 Span ID 不匹配，仍显示为单独的客户端尝试。网关为新的下游执行在转发前持久化 `ExecutionAttempt`。如果只是返回旧状态，沿用已有执行记录。
 
+OpenTelemetry 建议为每次实际发送 HTTP 请求创建独立的客户端 Span。因此按尝试埋点时，每次业务重试都会生成新的 `span_id`。HTTP 客户端未暴露单次尝试时，规范允许使用一个外层客户端 Span。OTLP 导出重试发送同一批已完成的 Span，沿用原 ID。网关的 `call_id` 和幂等规则属于业务协议。 [HTTP Span 规范](https://opentelemetry.io/docs/specs/semconv/http/http-spans/#http-client-span) · [OTLP 重试规范](https://opentelemetry.io/docs/specs/otlp/#all-other-responses)
+
 ```ts
 declare const tracing: TracingSdk
 declare const gatewayUrl: string
@@ -256,6 +258,6 @@ Dubhe 用 `dubhe.*` 属性传输自己的业务语义。跨进程身份通过认
 ## 5. 投递与验收
 
 - 运行时采集与业务执行分开。缓冲满时丢弃新遥测并增加丢弃计数，SDK 的队列不调用网关，也不承担网关审计重放。
-- 只有 OTLP 可重试失败或连接中断才退避重发同一批次。成功响应根据协议处理部分成功，整批不重发。服务端按作用域、Trace ID 和 Span ID 幂等持久化。SDK 记录接收失败、超过截止、队列丢弃及拒绝数量，指标按受控原因分类。
+- 只有 OTLP 可重试失败或连接中断才退避重发同一批次。成功响应根据协议处理部分成功，整批不重发。服务端在已验证的租户、环境和项目范围内按 `span_id` 幂等持久化，并校验重传数据的 `trace_id` 与原归属一致。SDK 记录接收失败、超过截止、队列丢弃及拒绝数量，指标按受控原因分类。
 - `flush` 有调用方时限。队列排空表示本进程待处理记录已完成本地投递流程，包括失败终止或被拒绝的记录。它适合测试、短任务结束和应用退场。`shutdown` 停止接收新遥测再尽力排空，可重复调用。业务回调的行为继续由业务决定。
 - 验收覆盖多轮根 Trace、并行和跨进程父子关系、在绑定后开始回调前退出的宿主恢复、登记故障和恢复、SDK 重传、网关拒绝却有调用 ID、无响应超时、仅本地调用、两路数据的不同到达顺序、错误作用域及禁采属性不出现在真实 OTLP 包中。 [OTLP/HTTP 规范](https://opentelemetry.io/docs/specs/otlp/#otlphttp)
