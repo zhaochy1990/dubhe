@@ -112,7 +112,7 @@ flowchart LR
 | `GET /v1/observability/sessions` | 按 `from,to,agent_id,result,q,tz,cursor` 查询，时间窗默认 7 天、上限 30 天。Agent 和结果支持多选，同类选项取并集、不同条件取交集。搜索匹配 Session ID 或 Agent 名称；筛选选项限定在访问范围，Agent 选项来自所查时间窗内可见会话。时间条件按 Session 开始时刻，区间为 `[from,to)`。时间桶按请求时区边界生成。列表、总数、分布在同一个 InnoDB `REPEATABLE READ` 只读事务内按同一授权和筛选条件计算。分页按 `started_at`、`session_id`、`tenant_id`、`environment_id`、`project_id` 降序，游标签名绑定过滤条件与授权范围；翻页之间状态可随投影更新。 [InnoDB 一致性读](https://dev.mysql.com/doc/refman/8.4/en/innodb-consistent-read.html) |
 | `GET /v1/observability/sessions/{id}/traces` | 按轮次或运行开始时间返回 Trace 摘要，支持游标分页。 |
 | `GET /v1/observability/traces/{id}` | 返回时间范围、治理摘要、紧凑节点集、节点 ID 及父子关系。超过单响应预算时使用明确的分段游标并标识未加载节点，父节点占位用结构标记表达。 |
-| `GET /v1/observability/nodes/{node_id}` | SDK Span 和网关工具节点使用同一详情接口。`node_id` 由 Trace 详情返回，分别编码为 `span:<span_id>` 或 `tool:<call_id>`。在已授权范围内按对应 ID 回查，校验对象所属会话和节点权限后返回详情。已采集的模型输入和工具参数仅在有内容查看权限且未到期时返回。 |
+| `GET /v1/observability/nodes/{node_id}` | SDK Span 和网关工具节点使用同一详情接口。`node_id` 分别编码为 `span:<span_id>` 或 `tool:<call_id>`。在已授权范围内按对应 ID 回查，校验对象所属会话和节点权限后返回详情。Trace 页面生成的链接附带可选的 `expected_trace_id`，仅用于校验回查到的对象仍属于预期 Trace，不一致时返回不可用。直接用 Span ID 查询时可省略该参数。已采集的模型输入和工具参数仅在有内容查看权限且未到期时返回。 |
 | `GET /v1/observability/tool-calls/{call_id}/trace` | 按本地索引返回可访问的工具节点深链。投影未就绪、已过期或不可见时统一返回不可用，网关审计页继续显示自己持有的证据。 |
 
 列表返回对象的租户、环境和项目范围。详情及工具深链请求带上完整范围和对象 ID，例如 `GET /v1/observability/traces/{id}?tenant_id=…&environment_id=…&project_id=…`。服务端先校验请求中的范围获授权，再用完整组合定位对象。
