@@ -33,6 +33,28 @@
     .async { stroke-dasharray: 5 4; }
     a { color: var(--accent); text-underline-offset: 4px; }
     footer { margin-top: 12px; font-size: 14px; }
+
+    .data-model { margin-top: 42px; }
+    .data-model h2 { margin: 0 0 10px; font-size: 28px; }
+    .data-model h3 { margin: 28px 0 10px; font-size: 19px; }
+    .data-model > p, .schema-table > p { max-width: 84ch; }
+    .model-diagram { margin-bottom: 8px; }
+    .er-divider { stroke: var(--line); fill: none; }
+    .er-key, .er-card { font-size: 13px; font-family: ui-monospace, "PingFang SC", monospace; }
+    .er-card { fill: var(--muted); }
+    .schema-note { font-size: 14px; }
+    .schema-table { margin: 0 0 10px; padding: 0 12px 8px; border: 1px solid var(--line); border-radius: 8px; background: #fbfdfc; }
+    .schema-table summary { padding: 9px 0 2px; cursor: pointer; overflow-wrap: anywhere; }
+    .schema-table[open] summary { margin-bottom: 8px; }
+    .schema-keys, .schema-rules { padding-left: 24px; }
+    .schema-keys { overflow-wrap: anywhere; }
+    .schema-rules li { margin-bottom: 10px; }
+    .table-scroll, .schema-table pre { overflow-x: auto; }
+    .table-scroll table { width: 100%; min-width: 620px; border-collapse: collapse; font-size: 14px; }
+    .table-scroll th, .table-scroll td { padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .table-scroll thead th { color: var(--ink); background: #eaf2ee; }
+    .table-scroll tbody th { font-weight: normal; }
+    .schema-table pre { padding: 12px; background: #f1f6f3; }
     @media print {
       body { padding: 0; }
       .diagram { overflow: visible; }
@@ -44,6 +66,7 @@
   <main>
     <h1>Agent Tracing 系统架构</h1>
     <p>SDK 上报客户端工具 Span，网关独立记录审计。Tracing 核对 call_id 和追踪上下文，匹配后在调用树中展示同一个工具节点。</p>
+    <p><a href="#data-model">查看 V1 数据结构与 ER 图</a></p>
     <div class="diagram" role="region" aria-label="可横向滚动的系统架构图" tabindex="0">
       <svg viewBox="0 0 1120 528" role="img" aria-labelledby="tracing-architecture-title tracing-architecture-desc" xmlns="http://www.w3.org/2000/svg">
         <title id="tracing-architecture-title">Agent Tracing 采集、审计与查询</title>
@@ -141,7 +164,684 @@
         </g>
       </svg>
     </div>
-    <footer><a href="tracing-architecture.md">查看完整架构设计</a></footer>
+    <section class="data-model" id="data-model" aria-labelledby="data-model-title">
+      <h2 id="data-model-title">V1 数据结构</h2>
+      <p>下图和建表草案描述 Tracing 的 MySQL 投影。网关审计与 Outbox 仍在执行侧。所有表的标识范围由 <code>tenant_id</code>、<code>environment_id</code>、<code>project_id</code> 组成。ER 图省略重复的范围列，物理键和跨表关联均包含这些列。</p>
+
+      <h3>会话与 SDK 遥测</h3>
+      <div class="diagram model-diagram" role="region" aria-label="会话与 SDK 遥测 ER 图" tabindex="0">
+        <svg viewBox="0 76 1120 396" role="img" aria-labelledby="tracing-telemetry-er-title tracing-telemetry-er-desc" xmlns="http://www.w3.org/2000/svg">
+          <title id="tracing-telemetry-er-title">会话与 SDK 遥测 ER 图</title>
+          <desc id="tracing-telemetry-er-desc">一个会话包含多条 Trace。Trace 拥有多个生产者授权和多个 Span。一个 Span 可以引用多个目标 Span。</desc>
+          <path class="path" d="M 240 176 H 324"/>
+          <text class="er-card" x="253" y="166" text-anchor="middle">1</text>
+          <text class="er-card" x="304" y="166" text-anchor="middle">0..N</text>
+          <path class="path" d="M 544 176 H 640"/>
+          <text class="er-card" x="557" y="166" text-anchor="middle">1</text>
+          <text class="er-card" x="620" y="166" text-anchor="middle">0..N</text>
+          <path class="path" d="M 848 176 H 912"/>
+          <text class="er-card" x="860" y="166" text-anchor="middle">1</text>
+          <text class="er-card" x="894" y="166" text-anchor="middle">0..N</text>
+          <path class="path" d="M 434 260 V 324"/>
+          <text class="er-card" x="449" y="276" text-anchor="middle">1</text>
+          <text class="er-card" x="462" y="314" text-anchor="middle">0..N</text>
+          <g class="node er-node">
+            <rect x="32" y="116" width="208" height="120" rx="8"/>
+            <text class="name" x="48" y="145">sessions</text>
+            <path class="er-divider" d="M 48 156 H 224"/>
+            <text class="er-key" x="48" y="178">PK  session_id</text>
+            <text class="er-key" x="48" y="202">    root_agent_id</text>
+            <text class="er-key" x="48" y="226">    started_at</text>
+          </g>
+          <g class="node er-node focus">
+            <rect x="324" y="116" width="220" height="144" rx="8"/>
+            <text class="name" x="340" y="145">traces</text>
+            <path class="er-divider" d="M 340 156 H 528"/>
+            <text class="er-key" x="340" y="178">PK  trace_id</text>
+            <text class="er-key" x="340" y="202">FK  session_id</text>
+            <text class="er-key" x="340" y="226">    run_kind + run_key</text>
+            <text class="er-key" x="340" y="250">    sdk_root_span_id</text>
+          </g>
+          <g class="node er-node">
+            <rect x="324" y="324" width="244" height="120" rx="8"/>
+            <text class="name" x="340" y="353">trace_producers</text>
+            <path class="er-divider" d="M 340 364 H 552"/>
+            <text class="er-key" x="340" y="386">PK  trace_id + producer_id</text>
+            <text class="er-key" x="340" y="410">+ agent_id</text>
+            <text class="er-key" x="340" y="434">FK  trace_id</text>
+          </g>
+          <g class="node er-node">
+            <rect x="640" y="116" width="208" height="144" rx="8"/>
+            <text class="name" x="656" y="145">spans</text>
+            <path class="er-divider" d="M 656 156 H 832"/>
+            <text class="er-key" x="656" y="178">PK  trace_id + span_id</text>
+            <text class="er-key" x="656" y="202">FK  trace_id</text>
+            <text class="er-key" x="656" y="226">    parent_span_id</text>
+            <text class="er-key" x="656" y="250">    client_call_id</text>
+          </g>
+          <g class="node er-node">
+            <rect x="912" y="116" width="176" height="120" rx="8"/>
+            <text class="name" x="928" y="145">span_links</text>
+            <path class="er-divider" d="M 928 156 H 1072"/>
+            <text class="er-key" x="928" y="178">PK  源与目标 ID</text>
+            <text class="er-key" x="928" y="202">FK  trace_id + span_id</text>
+            <text class="er-key" x="928" y="226">    target_span_id</text>
+          </g>
+        </svg>
+      </div>
+      <p class="schema-note">PK 为主键，FK 为外键，UQ 为唯一键。Span 的父节点和 Link 的目标允许迟到。它们按已验证范围解析，不要求目标行先写入。</p>
+
+      <h3>网关审计投影</h3>
+      <div class="diagram model-diagram" role="region" aria-label="网关审计投影 ER 图" tabindex="0">
+        <svg viewBox="0 0 1120 464" role="img" aria-labelledby="tracing-audit-er-title tracing-audit-er-desc" xmlns="http://www.w3.org/2000/svg">
+          <title id="tracing-audit-er-title">网关审计投影 ER 图</title>
+          <desc id="tracing-audit-er-desc">同一 Trace 可以有多条工具调用。每条调用最多有一个确认单，可以有多次执行尝试与多条审计事件。</desc>
+          <path class="path" d="M 244 224 H 352"/>
+          <text class="er-card" x="259" y="214" text-anchor="middle">1</text>
+          <text class="er-card" x="330" y="214" text-anchor="middle">0..N</text>
+          <path class="path" d="M 620 184 H 690 Q 698 184 698 176 V 92 Q 698 84 706 84 H 780"/>
+          <text class="er-card" x="635" y="174" text-anchor="middle">1</text>
+          <text class="er-card" x="758" y="74" text-anchor="middle">0..1</text>
+          <path class="path" d="M 620 230 H 780"/>
+          <text class="er-card" x="635" y="220" text-anchor="middle">1</text>
+          <text class="er-card" x="758" y="220" text-anchor="middle">0..N</text>
+          <path class="path" d="M 620 276 H 690 Q 698 276 698 284 V 368 Q 698 376 706 376 H 780"/>
+          <text class="er-card" x="635" y="266" text-anchor="middle">1</text>
+          <text class="er-card" x="758" y="366" text-anchor="middle">0..N</text>
+          <g class="node er-node">
+            <rect x="40" y="176" width="204" height="96" rx="8"/>
+            <text class="name" x="56" y="205">traces</text>
+            <path class="er-divider" d="M 56 216 H 228"/>
+            <text class="er-key" x="56" y="238">PK  trace_id</text>
+            <text class="er-key" x="56" y="262">FK  session_id</text>
+          </g>
+          <g class="node er-node focus">
+            <rect x="352" y="160" width="268" height="144" rx="8"/>
+            <text class="name" x="368" y="189">tool_calls</text>
+            <path class="er-divider" d="M 368 200 H 604"/>
+            <text class="er-key" x="368" y="222">PK  call_id</text>
+            <text class="er-key" x="368" y="246">FK  trace_id</text>
+            <text class="er-key" x="368" y="270">    inbound_sdk_span_id</text>
+            <text class="er-key" x="368" y="294">    initial_decision</text>
+          </g>
+          <g class="node er-node">
+            <rect x="780" y="24" width="276" height="120" rx="8"/>
+            <text class="name" x="796" y="53">confirmations</text>
+            <path class="er-divider" d="M 796 64 H 1040"/>
+            <text class="er-key" x="796" y="86">PK  confirmation_id</text>
+            <text class="er-key" x="796" y="110">FK  call_id</text>
+            <text class="er-key" x="796" y="134">    state + revision</text>
+          </g>
+          <g class="node er-node">
+            <rect x="780" y="170" width="276" height="120" rx="8"/>
+            <text class="name" x="796" y="199">execution_attempts</text>
+            <path class="er-divider" d="M 796 210 H 1040"/>
+            <text class="er-key" x="796" y="232">PK  call_id + attempt_id</text>
+            <text class="er-key" x="796" y="256">FK  call_id</text>
+            <text class="er-key" x="796" y="280">    attempt_no + revision</text>
+          </g>
+          <g class="node er-node">
+            <rect x="780" y="316" width="308" height="120" rx="8"/>
+            <text class="name" x="796" y="345">audit_events</text>
+            <path class="er-divider" d="M 796 356 H 1072"/>
+            <text class="er-key" x="796" y="378">PK  source_role + source_id + event_id</text>
+            <text class="er-key" x="796" y="402">FK  call_id</text>
+            <text class="er-key" x="796" y="426">UQ  stream_key + revision（按事实源）</text>
+          </g>
+        </svg>
+      </div>
+      <p class="schema-note">只有通过校验的 SDK 工具 Span 才会补充同一个网关工具节点。<code>deletion_marks</code> 独立保存，清理 Trace 或 Session 后仍可拒绝重放。</p>
+
+      <h3>字段、键与索引</h3>
+      <p>三列归属键统一为 <code>VARBINARY(64) NOT NULL</code>。平台及可信目录的不透明 ID 采用原有等值语义，超长值拒绝。Trace 和 Span ID 分别为 16 与 8 字节。业务时间使用 UTC <code>DATETIME(6)</code>，OTLP 时间保持 Unix 纳秒。JSON 查询响应将大整数时间原值编码成十进制字符串。</p>
+      <details class="schema-table" id="table-sessions">
+        <summary><code>sessions</code> · 会话列表及可信会话归属</summary>
+        <p>Session 按可信入口命名空间解析。显示名、MCP 协议 Session ID 和客户端自报身份无需进入主键。</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th scope="col">字段</th><th scope="col">MySQL 类型</th><th scope="col">允许空值</th><th scope="col">语义</th></tr></thead>
+          <tbody>
+            <tr><th scope="row"><code>session_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>平台业务 Session ID</td></tr>
+            <tr><th scope="row"><code>root_agent_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>可信入口或网关确认的根 Agent</td></tr>
+            <tr><th scope="row"><code>initiator_kind</code></th><td><code>ENUM(&#x27;user&#x27;,&#x27;workload&#x27;,&#x27;unknown&#x27;)</code></td><td>否</td><td>发起者类型</td></tr>
+            <tr><th scope="row"><code>initiator_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>可信主体标识，未知时为空</td></tr>
+            <tr><th scope="row"><code>started_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>可信会话开始时间，登记后固定</td></tr>
+            <tr><th scope="row"><code>last_activity_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>写入时维护的候选时间，供内部检索和清理</td></tr>
+          </tbody>
+        </table></div>
+        <p class="schema-note">键与索引</p>
+        <ul class="schema-keys">
+          <li><code>PRIMARY KEY (tenant_id, environment_id, project_id, session_id)</code></li>
+          <li><code>KEY ix_session_start (tenant_id, environment_id, project_id, started_at DESC, session_id DESC)</code></li>
+          <li><code>KEY ix_session_agent (tenant_id, environment_id, project_id, root_agent_id, started_at DESC, session_id DESC)</code></li>
+        </ul>
+      </details>
+      <details class="schema-table" id="table-traces">
+        <summary><code>traces</code> · 对话轮次、自主运行及仅网关调用的可信登记</summary>
+        <p>网关事件可先建立记录。可信入口后到时，使用同一 Session、Trace、轮次和原始登记时间补 SDK 登记。轮次已绑定不同 Trace ID 时报告冲突，保留原有绑定。</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th scope="col">字段</th><th scope="col">MySQL 类型</th><th scope="col">允许空值</th><th scope="col">语义</th></tr></thead>
+          <tbody>
+            <tr><th scope="row"><code>trace_id</code></th><td><code>BINARY(16)</code></td><td>否</td><td>解码后的非零 OTel Trace ID</td></tr>
+            <tr><th scope="row"><code>session_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>所属 Session</td></tr>
+            <tr><th scope="row"><code>run_kind</code></th><td><code>ENUM(&#x27;turn&#x27;,&#x27;autonomous&#x27;,&#x27;gateway_call&#x27;)</code></td><td>否</td><td>区分对话轮次、自主运行、独立网关调用</td></tr>
+            <tr><th scope="row"><code>run_key</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>可信轮次 ID、运行 ID 或回退 call_id</td></tr>
+            <tr><th scope="row"><code>task_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>可信业务任务引用</td></tr>
+            <tr><th scope="row"><code>correlation_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>可选业务相关 ID</td></tr>
+            <tr><th scope="row"><code>registered_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>签入凭据的原始登记时间。仅接网关时取网关首次登记</td></tr>
+            <tr><th scope="row"><code>sdk_root_span_id</code></th><td><code>BINARY(8)</code></td><td>是</td><td>由可信入口登记的 SDK 根 Span ID</td></tr>
+            <tr><th scope="row"><code>sdk_root_producer_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>与根 Agent 一起限定可写入根终态的生产者</td></tr>
+            <tr><th scope="row"><code>sdk_accept_until</code></th><td><code>DATETIME(6)</code></td><td>是</td><td>SDK 接收截止时间，纯网关 Trace 为空</td></tr>
+            <tr><th scope="row"><code>run_state</code></th><td><code>ENUM(&#x27;unknown&#x27;,&#x27;running&#x27;,&#x27;completed&#x27;,&#x27;failed&#x27;,&#x27;cancelled&#x27;)</code></td><td>否</td><td>可信入口或已登记根 Span 给出的运行状态</td></tr>
+            <tr><th scope="row"><code>observed_start_ns</code></th><td><code>BIGINT UNSIGNED</code></td><td>是</td><td>已接收节点的最早观测时间，内部候选</td></tr>
+            <tr><th scope="row"><code>observed_end_ns</code></th><td><code>BIGINT UNSIGNED</code></td><td>是</td><td>已接收节点的最晚观测时间，内部候选</td></tr>
+            <tr><th scope="row"><code>expires_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>常规到期与当前保留期限取较晚者</td></tr>
+          </tbody>
+        </table></div>
+        <p class="schema-note">键与索引</p>
+        <ul class="schema-keys">
+          <li><code>PRIMARY KEY (tenant_id, environment_id, project_id, trace_id)</code></li>
+          <li><code>CONSTRAINT fk_trace_session FOREIGN KEY (tenant_id, environment_id, project_id, session_id) REFERENCES sessions (tenant_id, environment_id, project_id, session_id) ON DELETE CASCADE</code></li>
+          <li><code>UNIQUE KEY uk_trace_run (tenant_id, environment_id, project_id, session_id, run_kind, run_key)</code></li>
+          <li><code>KEY ix_trace_session (tenant_id, environment_id, project_id, session_id, registered_at, trace_id)</code></li>
+          <li><code>KEY ix_trace_expiry (expires_at)</code></li>
+        </ul>
+      </details>
+      <details class="schema-table" id="table-trace_producers">
+        <summary><code>trace_producers</code> · SDK 生产者与可执行 Agent 的授权组合</summary>
+        <p>接入时检查生产者与 Agent 的精确组合。网关事件创建 Trace 记录后，SDK 仍需可信入口登记才能上报。</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th scope="col">字段</th><th scope="col">MySQL 类型</th><th scope="col">允许空值</th><th scope="col">语义</th></tr></thead>
+          <tbody>
+            <tr><th scope="row"><code>trace_id</code></th><td><code>BINARY(16)</code></td><td>否</td><td>已完成可信登记的 Trace</td></tr>
+            <tr><th scope="row"><code>producer_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>从工作负载认证解析的生产者标识</td></tr>
+            <tr><th scope="row"><code>agent_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>该生产者在本 Trace 内可上报的执行 Agent</td></tr>
+            <tr><th scope="row"><code>registered_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>授权绑定写入时间</td></tr>
+            <tr><th scope="row"><code>revoked_at</code></th><td><code>DATETIME(6)</code></td><td>是</td><td>撤销时间。已存历史保持来源标识</td></tr>
+          </tbody>
+        </table></div>
+        <p class="schema-note">键与索引</p>
+        <ul class="schema-keys">
+          <li><code>PRIMARY KEY (tenant_id, environment_id, project_id, trace_id, producer_id, agent_id)</code></li>
+          <li><code>CONSTRAINT fk_producer_trace FOREIGN KEY (tenant_id, environment_id, project_id, trace_id) REFERENCES traces (tenant_id, environment_id, project_id, trace_id) ON DELETE CASCADE</code></li>
+        </ul>
+      </details>
+      <details class="schema-table" id="table-spans">
+        <summary><code>spans</code> · 不可变的已归一化 OTLP Span</summary>
+        <p>写入前校验非零 ID、类型和字段适用性。每个 Trace 锁住登记行后校验父子环。只有登记的根生产者、根 Agent 和根 Span ID 同时一致，才写入根运行终态。parent_span_id 不建外键以支持乱序。客户端状态与网关执行状态独立。</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th scope="col">字段</th><th scope="col">MySQL 类型</th><th scope="col">允许空值</th><th scope="col">语义</th></tr></thead>
+          <tbody>
+            <tr><th scope="row"><code>trace_id</code></th><td><code>BINARY(16)</code></td><td>否</td><td>已登记 Trace</td></tr>
+            <tr><th scope="row"><code>span_id</code></th><td><code>BINARY(8)</code></td><td>否</td><td>OTel Span ID，默认以 16 位十六进制返回</td></tr>
+            <tr><th scope="row"><code>parent_span_id</code></th><td><code>BINARY(8)</code></td><td>是</td><td>同 Trace 父 Span。允许父节点迟到</td></tr>
+            <tr><th scope="row"><code>producer_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>通过认证的生产者</td></tr>
+            <tr><th scope="row"><code>agent_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>可信登记授权的执行 Agent</td></tr>
+            <tr><th scope="row"><code>kind</code></th><td><code>ENUM(&#x27;run&#x27;,&#x27;agent&#x27;,&#x27;llm&#x27;,&#x27;tool_client&#x27;)</code></td><td>否</td><td>V1 允许的节点种类</td></tr>
+            <tr><th scope="row"><code>start_ns</code></th><td><code>BIGINT UNSIGNED</code></td><td>否</td><td>OTLP Unix 纳秒起点</td></tr>
+            <tr><th scope="row"><code>end_ns</code></th><td><code>BIGINT UNSIGNED</code></td><td>否</td><td>OTLP Unix 纳秒终点</td></tr>
+            <tr><th scope="row"><code>status</code></th><td><code>ENUM(&#x27;unset&#x27;,&#x27;ok&#x27;,&#x27;error&#x27;)</code></td><td>否</td><td>OTel Span 状态，独立于业务运行结果</td></tr>
+            <tr><th scope="row"><code>run_outcome</code></th><td><code>ENUM(&#x27;completed&#x27;,&#x27;failed&#x27;,&#x27;cancelled&#x27;)</code></td><td>是</td><td>已登记根 Span 的显式运行终态</td></tr>
+            <tr><th scope="row"><code>tool_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>可信目录中的工具标识</td></tr>
+            <tr><th scope="row"><code>tool_route</code></th><td><code>ENUM(&#x27;gateway&#x27;,&#x27;local&#x27;,&#x27;direct&#x27;)</code></td><td>是</td><td>工具调用位置，客户端 Span 必须提供</td></tr>
+            <tr><th scope="row"><code>client_call_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>工具客户端从网关响应取得的调用 ID</td></tr>
+            <tr><th scope="row"><code>client_result</code></th><td><code>ENUM(&#x27;response&#x27;,&#x27;timeout&#x27;,&#x27;error&#x27;,&#x27;cancelled&#x27;)</code></td><td>是</td><td>客户端观察到的结束类型</td></tr>
+            <tr><th scope="row"><code>response_code</code></th><td><code>SMALLINT UNSIGNED</code></td><td>是</td><td>收到的 HTTP 状态码，超时无响应时为空</td></tr>
+            <tr><th scope="row"><code>error_code</code></th><td><code>VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin</code></td><td>是</td><td>固定错误分类码</td></tr>
+            <tr><th scope="row"><code>model_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>可信目录映射的模型标识</td></tr>
+            <tr><th scope="row"><code>input_tokens</code></th><td><code>INT UNSIGNED</code></td><td>是</td><td>模型报告的输入 Token 数</td></tr>
+            <tr><th scope="row"><code>output_tokens</code></th><td><code>INT UNSIGNED</code></td><td>是</td><td>模型报告的输出 Token 数</td></tr>
+            <tr><th scope="row"><code>max_output_tokens</code></th><td><code>INT UNSIGNED</code></td><td>是</td><td>已知请求输出上限</td></tr>
+            <tr><th scope="row"><code>temperature</code></th><td><code>DECIMAL(6,4)</code></td><td>是</td><td>已知请求采样参数，按约定精度归一化</td></tr>
+            <tr><th scope="row"><code>received_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>服务端首次接收时间</td></tr>
+            <tr><th scope="row"><code>metadata_hash</code></th><td><code>BINARY(32)</code></td><td>否</td><td>规范化字段及受控 Links 的摘要，用于幂等核对</td></tr>
+          </tbody>
+        </table></div>
+        <p class="schema-note">键与索引</p>
+        <ul class="schema-keys">
+          <li><code>PRIMARY KEY (tenant_id, environment_id, project_id, trace_id, span_id)</code></li>
+          <li><code>CONSTRAINT fk_span_trace FOREIGN KEY (tenant_id, environment_id, project_id, trace_id) REFERENCES traces (tenant_id, environment_id, project_id, trace_id) ON DELETE CASCADE</code></li>
+          <li><code>KEY ix_span_timeline (tenant_id, environment_id, project_id, trace_id, start_ns, span_id)</code></li>
+          <li><code>KEY ix_span_parent (tenant_id, environment_id, project_id, trace_id, parent_span_id, span_id)</code></li>
+        </ul>
+      </details>
+      <details class="schema-table" id="table-span_links">
+        <summary><code>span_links</code> · 独立运行之间的可选引用</summary>
+        <p>只存来源可信且范围可验证的引用。目标允许迟到或过期。读时对目标再次鉴权。Link 不参与父子树。</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th scope="col">字段</th><th scope="col">MySQL 类型</th><th scope="col">允许空值</th><th scope="col">语义</th></tr></thead>
+          <tbody>
+            <tr><th scope="row"><code>trace_id</code></th><td><code>BINARY(16)</code></td><td>否</td><td>源 Trace</td></tr>
+            <tr><th scope="row"><code>span_id</code></th><td><code>BINARY(8)</code></td><td>否</td><td>源 Span</td></tr>
+            <tr><th scope="row"><code>target_trace_id</code></th><td><code>BINARY(16)</code></td><td>否</td><td>同一项目范围内的目标 Trace</td></tr>
+            <tr><th scope="row"><code>target_span_id</code></th><td><code>BINARY(8)</code></td><td>否</td><td>目标 Span</td></tr>
+          </tbody>
+        </table></div>
+        <p class="schema-note">键与索引</p>
+        <ul class="schema-keys">
+          <li><code>PRIMARY KEY (tenant_id, environment_id, project_id, trace_id, span_id, target_trace_id, target_span_id)</code></li>
+          <li><code>CONSTRAINT fk_link_source FOREIGN KEY (tenant_id, environment_id, project_id, trace_id, span_id) REFERENCES spans (tenant_id, environment_id, project_id, trace_id, span_id) ON DELETE CASCADE</code></li>
+          <li><code>KEY ix_link_target (tenant_id, environment_id, project_id, target_trace_id, target_span_id)</code></li>
+        </ul>
+      </details>
+      <details class="schema-table" id="table-tool_calls">
+        <summary><code>tool_calls</code> · 网关工具主节点及其当前决策快照</summary>
+        <p>任何合法事件携带已确定的核心绑定，可初始化主节点。后到的可信来源可补齐未知引用，已确定的归属、调用身份、工具与操作标识保持固定。策略版本和原因码见 audit_events。</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th scope="col">字段</th><th scope="col">MySQL 类型</th><th scope="col">允许空值</th><th scope="col">语义</th></tr></thead>
+          <tbody>
+            <tr><th scope="row"><code>call_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>平台工具调用 ID</td></tr>
+            <tr><th scope="row"><code>trace_id</code></th><td><code>BINARY(16)</code></td><td>否</td><td>验签后绑定的 Trace</td></tr>
+            <tr><th scope="row"><code>agent_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>网关核验的调用 Agent，未归属时为空</td></tr>
+            <tr><th scope="row"><code>tool_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>工具目录 ID</td></tr>
+            <tr><th scope="row"><code>operation_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>操作 ID</td></tr>
+            <tr><th scope="row"><code>operation_version</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>操作版本</td></tr>
+            <tr><th scope="row"><code>inbound_sdk_span_id</code></th><td><code>BINARY(8)</code></td><td>是</td><td>验签且 Trace 匹配后的 traceparent.parent-id</td></tr>
+            <tr><th scope="row"><code>caller_kind</code></th><td><code>ENUM(&#x27;user&#x27;,&#x27;workload&#x27;,&#x27;unknown&#x27;)</code></td><td>否</td><td>调用主体类型</td></tr>
+            <tr><th scope="row"><code>caller_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>可信主体 ID</td></tr>
+            <tr><th scope="row"><code>delegation_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>委托链引用</td></tr>
+            <tr><th scope="row"><code>downstream_actor_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>实际执行主体引用</td></tr>
+            <tr><th scope="row"><code>authorization_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>授权记录引用</td></tr>
+            <tr><th scope="row"><code>permission_epoch</code></th><td><code>BIGINT UNSIGNED</code></td><td>是</td><td>授权代次</td></tr>
+            <tr><th scope="row"><code>credential_ref_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>凭证引用 ID</td></tr>
+            <tr><th scope="row"><code>credential_audience_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>凭证受众引用</td></tr>
+            <tr><th scope="row"><code>resource_ref_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>目标资源引用</td></tr>
+            <tr><th scope="row"><code>destination_ref_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>目标地址引用</td></tr>
+            <tr><th scope="row"><code>classification_code</code></th><td><code>VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin</code></td><td>是</td><td>策略输出分类码</td></tr>
+            <tr><th scope="row"><code>started_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>网关首次受理时间</td></tr>
+            <tr><th scope="row"><code>initial_decision</code></th><td><code>ENUM(&#x27;allowed&#x27;,&#x27;blocked&#x27;,&#x27;denied&#x27;,&#x27;confirmation_required&#x27;)</code></td><td>是</td><td>首条策略决策，其他事件先到时为空</td></tr>
+            <tr><th scope="row"><code>recheck_decision</code></th><td><code>ENUM(&#x27;allowed&#x27;,&#x27;blocked&#x27;,&#x27;denied&#x27;,&#x27;confirmation_required&#x27;)</code></td><td>是</td><td>最新的确认后复验决策</td></tr>
+            <tr><th scope="row"><code>recheck_revision</code></th><td><code>BIGINT UNSIGNED</code></td><td>是</td><td>复验流最新修订号</td></tr>
+          </tbody>
+        </table></div>
+        <p class="schema-note">键与索引</p>
+        <ul class="schema-keys">
+          <li><code>PRIMARY KEY (tenant_id, environment_id, project_id, call_id)</code></li>
+          <li><code>CONSTRAINT fk_call_trace FOREIGN KEY (tenant_id, environment_id, project_id, trace_id) REFERENCES traces (tenant_id, environment_id, project_id, trace_id) ON DELETE CASCADE</code></li>
+          <li><code>KEY ix_call_timeline (tenant_id, environment_id, project_id, trace_id, started_at, call_id)</code></li>
+        </ul>
+      </details>
+      <details class="schema-table" id="table-confirmations">
+        <summary><code>confirmations</code> · 调用关联的确认状态</summary>
+        <p>V1 每个 call_id 最多一个确认单。批准表示确认完成，之后仍须读取独立的网关复验决策和执行结果。</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th scope="col">字段</th><th scope="col">MySQL 类型</th><th scope="col">允许空值</th><th scope="col">语义</th></tr></thead>
+          <tbody>
+            <tr><th scope="row"><code>confirmation_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>执行侧确认单 ID</td></tr>
+            <tr><th scope="row"><code>call_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>原网关调用</td></tr>
+            <tr><th scope="row"><code>state</code></th><td><code>ENUM(&#x27;pending&#x27;,&#x27;approved&#x27;,&#x27;denied&#x27;,&#x27;expired&#x27;)</code></td><td>否</td><td>确认服务确认的当前状态</td></tr>
+            <tr><th scope="row"><code>revision</code></th><td><code>BIGINT UNSIGNED</code></td><td>否</td><td>确认单状态修订号</td></tr>
+            <tr><th scope="row"><code>actor_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>可核验的确认人 ID</td></tr>
+            <tr><th scope="row"><code>deadline_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>确认有效期</td></tr>
+            <tr><th scope="row"><code>action_at</code></th><td><code>DATETIME(6)</code></td><td>是</td><td>确认、拒绝或超时的服务端事件时间</td></tr>
+            <tr><th scope="row"><code>hold_until</code></th><td><code>DATETIME(6)</code></td><td>是</td><td>执行侧给出的有限留存期限</td></tr>
+          </tbody>
+        </table></div>
+        <p class="schema-note">键与索引</p>
+        <ul class="schema-keys">
+          <li><code>PRIMARY KEY (tenant_id, environment_id, project_id, confirmation_id)</code></li>
+          <li><code>CONSTRAINT fk_confirmation_call FOREIGN KEY (tenant_id, environment_id, project_id, call_id) REFERENCES tool_calls (tenant_id, environment_id, project_id, call_id) ON DELETE CASCADE</code></li>
+          <li><code>UNIQUE KEY uk_confirmation_call (tenant_id, environment_id, project_id, call_id)</code></li>
+        </ul>
+      </details>
+      <details class="schema-table" id="table-execution_attempts">
+        <summary><code>execution_attempts</code> · 下游执行尝试与对账结果</summary>
+        <p>attempt_no 表示同一调用的执行顺序，revision 只在该次尝试内比较。旧尝试的迟到回执可补历史，不能回退最新尝试状态。</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th scope="col">字段</th><th scope="col">MySQL 类型</th><th scope="col">允许空值</th><th scope="col">语义</th></tr></thead>
+          <tbody>
+            <tr><th scope="row"><code>call_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>原网关调用</td></tr>
+            <tr><th scope="row"><code>attempt_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>执行侧尝试 ID</td></tr>
+            <tr><th scope="row"><code>attempt_no</code></th><td><code>INT UNSIGNED</code></td><td>否</td><td>同一调用下的尝试序号，从 1 开始</td></tr>
+            <tr><th scope="row"><code>state</code></th><td><code>ENUM(&#x27;executing&#x27;,&#x27;succeeded&#x27;,&#x27;failed&#x27;,&#x27;unknown&#x27;)</code></td><td>否</td><td>执行器记录的执行或对账结果</td></tr>
+            <tr><th scope="row"><code>revision</code></th><td><code>BIGINT UNSIGNED</code></td><td>否</td><td>本次尝试的状态修订号</td></tr>
+            <tr><th scope="row"><code>started_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>本次执行意图的服务端时间</td></tr>
+            <tr><th scope="row"><code>finished_at</code></th><td><code>DATETIME(6)</code></td><td>是</td><td>结束时间，结果未知时可为空</td></tr>
+            <tr><th scope="row"><code>downstream_request_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>可核验的下游请求 ID</td></tr>
+            <tr><th scope="row"><code>downstream_actor_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>本次尝试实际使用的执行主体引用</td></tr>
+            <tr><th scope="row"><code>evidence_ref_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>回执或独立对账引用</td></tr>
+            <tr><th scope="row"><code>hold_until</code></th><td><code>DATETIME(6)</code></td><td>是</td><td>执行侧给出的有限对账保留期限</td></tr>
+          </tbody>
+        </table></div>
+        <p class="schema-note">键与索引</p>
+        <ul class="schema-keys">
+          <li><code>PRIMARY KEY (tenant_id, environment_id, project_id, call_id, attempt_id)</code></li>
+          <li><code>CONSTRAINT fk_attempt_call FOREIGN KEY (tenant_id, environment_id, project_id, call_id) REFERENCES tool_calls (tenant_id, environment_id, project_id, call_id) ON DELETE CASCADE</code></li>
+          <li><code>UNIQUE KEY uk_attempt_no (tenant_id, environment_id, project_id, call_id, attempt_no)</code></li>
+        </ul>
+      </details>
+      <details class="schema-table" id="table-audit_events">
+        <summary><code>audit_events</code> · 结构化审计历史及消费者去重记录</summary>
+        <p>只保存可查询的标准字段。完整策略证据、确认与业务审计仍由网关持有。审计历史及去重记录随同一 Trace 的投影删除。</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th scope="col">字段</th><th scope="col">MySQL 类型</th><th scope="col">允许空值</th><th scope="col">语义</th></tr></thead>
+          <tbody>
+            <tr><th scope="row"><code>source_role</code></th><td><code>ENUM(&#x27;gateway&#x27;,&#x27;confirmation&#x27;,&#x27;executor&#x27;)</code></td><td>否</td><td>由内部服务身份确定的事实源角色</td></tr>
+            <tr><th scope="row"><code>source_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>跨实例发布与重启保持稳定的逻辑发布者 ID</td></tr>
+            <tr><th scope="row"><code>event_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>事实源生成的稳定事件 ID</td></tr>
+            <tr><th scope="row"><code>call_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>原网关调用</td></tr>
+            <tr><th scope="row"><code>stream_key</code></th><td><code>VARBINARY(160)</code></td><td>否</td><td>编码后的事件流身份，见事件契约</td></tr>
+            <tr><th scope="row"><code>revision</code></th><td><code>BIGINT UNSIGNED</code></td><td>否</td><td>该流内的单调修订号</td></tr>
+            <tr><th scope="row"><code>event_kind</code></th><td><code>ENUM(&#x27;initial_decision&#x27;,&#x27;recheck&#x27;,&#x27;confirmation&#x27;,&#x27;attempt&#x27;)</code></td><td>否</td><td>决定允许的事实源与状态字段</td></tr>
+            <tr><th scope="row"><code>confirmation_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>只用于确认事件</td></tr>
+            <tr><th scope="row"><code>attempt_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>只用于执行事件</td></tr>
+            <tr><th scope="row"><code>decision</code></th><td><code>ENUM(&#x27;allowed&#x27;,&#x27;blocked&#x27;,&#x27;denied&#x27;,&#x27;confirmation_required&#x27;)</code></td><td>是</td><td>只用于网关决策与复验事件</td></tr>
+            <tr><th scope="row"><code>confirmation_state</code></th><td><code>ENUM(&#x27;pending&#x27;,&#x27;approved&#x27;,&#x27;denied&#x27;,&#x27;expired&#x27;)</code></td><td>是</td><td>只用于确认事件</td></tr>
+            <tr><th scope="row"><code>execution_state</code></th><td><code>ENUM(&#x27;executing&#x27;,&#x27;succeeded&#x27;,&#x27;failed&#x27;,&#x27;unknown&#x27;)</code></td><td>是</td><td>只用于执行事件</td></tr>
+            <tr><th scope="row"><code>confirmation_actor_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>确认事件当时的可信确认人</td></tr>
+            <tr><th scope="row"><code>confirmation_deadline_at</code></th><td><code>DATETIME(6)</code></td><td>是</td><td>该修订的确认截止时间</td></tr>
+            <tr><th scope="row"><code>confirmation_action_at</code></th><td><code>DATETIME(6)</code></td><td>是</td><td>该修订的确认、拒绝或过期时间</td></tr>
+            <tr><th scope="row"><code>attempt_no</code></th><td><code>INT UNSIGNED</code></td><td>是</td><td>执行事件所对应的尝试序号</td></tr>
+            <tr><th scope="row"><code>attempt_started_at</code></th><td><code>DATETIME(6)</code></td><td>是</td><td>该修订中的执行意图时间</td></tr>
+            <tr><th scope="row"><code>attempt_finished_at</code></th><td><code>DATETIME(6)</code></td><td>是</td><td>该修订中的执行结束时间</td></tr>
+            <tr><th scope="row"><code>downstream_request_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>该次执行回执的下游请求引用</td></tr>
+            <tr><th scope="row"><code>downstream_actor_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>该次执行记录的实际下游主体</td></tr>
+            <tr><th scope="row"><code>hold_until</code></th><td><code>DATETIME(6)</code></td><td>是</td><td>确认或对账当时的有限保留期限</td></tr>
+            <tr><th scope="row"><code>policy_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>命中的主要策略 ID</td></tr>
+            <tr><th scope="row"><code>policy_version</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>匹配的已生效策略版本</td></tr>
+            <tr><th scope="row"><code>reason_code</code></th><td><code>VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin</code></td><td>是</td><td>策略、确认或执行的原因码</td></tr>
+            <tr><th scope="row"><code>evidence_ref_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>执行侧授权系统可回查的证据引用</td></tr>
+            <tr><th scope="row"><code>schema_version</code></th><td><code>SMALLINT UNSIGNED</code></td><td>否</td><td>事件契约版本</td></tr>
+            <tr><th scope="row"><code>occurred_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>事实源记录的发生时间</td></tr>
+            <tr><th scope="row"><code>received_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>Tracing 消费成功时间</td></tr>
+            <tr><th scope="row"><code>event_hash</code></th><td><code>BINARY(32)</code></td><td>否</td><td>规范化事件内容摘要</td></tr>
+          </tbody>
+        </table></div>
+        <p class="schema-note">键与索引</p>
+        <ul class="schema-keys">
+          <li><code>PRIMARY KEY (tenant_id, environment_id, project_id, source_role, source_id, event_id)</code></li>
+          <li><code>CONSTRAINT fk_event_call FOREIGN KEY (tenant_id, environment_id, project_id, call_id) REFERENCES tool_calls (tenant_id, environment_id, project_id, call_id) ON DELETE CASCADE</code></li>
+          <li><code>UNIQUE KEY uk_event_revision (tenant_id, environment_id, project_id, source_role, source_id, stream_key, revision)</code></li>
+          <li><code>KEY ix_event_history (tenant_id, environment_id, project_id, call_id, occurred_at, source_role, source_id, event_id)</code></li>
+        </ul>
+      </details>
+      <details class="schema-table" id="table-deletion_marks">
+        <summary><code>deletion_marks</code> · 阻止迟到事件或备份恢复重建已删除对象</summary>
+        <p>独立保留删除增量，恢复时先补齐。Session 最后一条 Trace 自然到期时清理列表行，只给 Trace 留标记。主动删除 Session 才加 Session 标记。</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th scope="col">字段</th><th scope="col">MySQL 类型</th><th scope="col">允许空值</th><th scope="col">语义</th></tr></thead>
+          <tbody>
+            <tr><th scope="row"><code>object_kind</code></th><td><code>ENUM(&#x27;trace&#x27;,&#x27;session&#x27;)</code></td><td>否</td><td>删除对象类别</td></tr>
+            <tr><th scope="row"><code>object_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>Trace 为 16 字节，Session 为平台 ID</td></tr>
+            <tr><th scope="row"><code>deleted_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>生效删除时间</td></tr>
+            <tr><th scope="row"><code>retain_until</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>覆盖最长事件重放窗口及可恢复备份</td></tr>
+            <tr><th scope="row"><code>reason</code></th><td><code>ENUM(&#x27;expired&#x27;,&#x27;deleted&#x27;)</code></td><td>否</td><td>自然到期或主动删除</td></tr>
+          </tbody>
+        </table></div>
+        <p class="schema-note">键与索引</p>
+        <ul class="schema-keys">
+          <li><code>PRIMARY KEY (tenant_id, environment_id, project_id, object_kind, object_id)</code></li>
+          <li><code>KEY ix_delete_expiry (retain_until)</code></li>
+        </ul>
+      </details>
+
+      <h3>网关事件契约</h3>
+      <p>内部消息使用版本 1。所有事件携带作用域、已验签的 Trace 绑定与登记时间、Session 与轮次、可信调用元数据、调用 ID、事实源身份、事件 ID、修订号和发生时间。稳定的公共字段包含归属、Trace 绑定、call_id、受理时间、工具与操作 ID。尚缺的身份或证据引用由拥有该字段的事实源补齐。状态快照按以下流分开递增。</p>
+      <div class="table-scroll"><table>
+        <thead><tr><th scope="col">事件</th><th scope="col">事实源与修订范围</th><th scope="col">事件特有字段</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><code>initial_decision</code></th><td>网关 · call_id 的初始决策</td><td>决策、原因码、主要策略 ID/版本、证据引用</td></tr>
+          <tr><th scope="row"><code>recheck</code></th><td>网关 · call_id 的复验</td><td>复验决策、原因码、主要策略 ID/版本、证据引用</td></tr>
+          <tr><th scope="row"><code>confirmation</code></th><td>确认服务 · confirmation_id</td><td>当前状态、确认人、截止和动作时间、保留期限、证据引用</td></tr>
+          <tr><th scope="row"><code>attempt</code></th><td>执行器 · call_id + attempt_id</td><td>尝试序号、当前结果、起止、下游请求、证据引用、对账保留期限</td></tr>
+        </tbody>
+      </table></div>
+      <p class="schema-note"><code>stream_key</code> 使用事件类型与表中对象 ID 的长度前缀编码。事件 ID 负责重放去重。同一发布者的相同流与修订只接受相同规范化事实。每条流绑定跨实例稳定的逻辑发布者，服务身份须被授权代该发布者发送事件。不同事实源的修订号独立比较。</p>
+
+      <h3>入库、合并与查询规则</h3>
+      <ol class="schema-rules">
+        <li><strong>OTLP。</strong> 每个 exporter 的工作负载身份绑定单一租户、环境和项目，批次可以混合该范围的多条 Trace。在事务中校验可信登记、接收截止与生产者权限。按 Trace 顺序锁定登记行后检查父子结构，对允许字段和 Links 生成稳定摘要，批量插入并核对重复键。等价重试计为成功，冲突保留先前记录。只用已接受的行更新会话和 Trace，提交后再回 OTLP 成功。事务结果不明时按可重试错误处理。</li>
+        <li><strong>Outbox。</strong> 校验事实源与事件类型，锁定对应 Trace 并写入审计历史和快照。同一事件重放不改变记录。较旧修订进入历史，最新快照由对应流的较大修订更新。确认、尝试和复验各自维护状态。MySQL 提交后才确认 Outbox。未知版本和结构错误进入执行侧诊断，保留来源及原因码。</li>
+        <li><strong>工具节点。</strong> 对齐归属、<code>trace_id</code>、<code>agent_id</code> 和 <code>call_id</code>，再比较 <code>inbound_sdk_span_id = spans.span_id</code>。匹配后使用网关节点 ID，沿 SDK Span 的 <code>parent_span_id</code> 挂树并补客户端耗时。SDK 或审计先到都能展示。两边匹配后用同一节点计数，只有 SDK 时按客户端观测展示，工具路径来自受控枚举。幂等重试即使收到原 call_id，也要匹配网关记录的原入站 Span ID，否则继续显示为独立客户端尝试。</li>
+        <li><strong>状态与授权。</strong> 网关初始决策、最新复验、确认和最新执行尝试分别保留。阻断或拒绝且有证据表明未尝试时显示未执行。缺少结果时显示未知。所有跨表读取同时匹配归属与对象 ID，授权后才组树、计算 Session 结果及可见调用数。节点使用 <code>span:</code> 或 <code>tool:</code> 开头的独立 ID，SDK 已匹配时在本 Trace 内解析到对应的工具主节点。无权读取时使用统一的不可用响应。</li>
+        <li><strong>留存。</strong> 基础到期从可信原始登记起算 30 天。只对清理前已消费到的确认和对账事件，按可信的有限 <code>hold_until</code> 延长留存。到期后收到的事件仍可在网关审计域按调用 ID 查阅。写入与清理使用同样的归属及对象锁顺序，将删除标记与删除写在同一事务。重放遵守原始到期和删除标记，恢复时先恢复独立保留的删除增量。</li>
+      </ol>
+      <p class="schema-note">应用层校验字节 ID、允许字段、关系和授权组合。建表草案用于评审及本地验证，主键、类型、索引与约束可直接在 MySQL 8.4 验证。</p>
+      <details class="schema-table">
+        <summary>查看 MySQL 建表草案</summary>
+        <pre><code id="tracing-ddl">CREATE TABLE sessions (
+  tenant_id VARBINARY(64) NOT NULL,
+  environment_id VARBINARY(64) NOT NULL,
+  project_id VARBINARY(64) NOT NULL,
+  session_id VARBINARY(64) NOT NULL,
+  root_agent_id VARBINARY(64) NOT NULL,
+  initiator_kind ENUM('user','workload','unknown') NOT NULL DEFAULT 'unknown',
+  initiator_id VARBINARY(64) NULL,
+  started_at DATETIME(6) NOT NULL,
+  last_activity_at DATETIME(6) NOT NULL,
+  PRIMARY KEY (tenant_id, environment_id, project_id, session_id),
+  KEY ix_session_start (tenant_id, environment_id, project_id, started_at DESC, session_id DESC),
+  KEY ix_session_agent (tenant_id, environment_id, project_id, root_agent_id, started_at DESC, session_id DESC)
+) ENGINE=InnoDB;
+
+CREATE TABLE traces (
+  tenant_id VARBINARY(64) NOT NULL,
+  environment_id VARBINARY(64) NOT NULL,
+  project_id VARBINARY(64) NOT NULL,
+  trace_id BINARY(16) NOT NULL,
+  session_id VARBINARY(64) NOT NULL,
+  run_kind ENUM('turn','autonomous','gateway_call') NOT NULL,
+  run_key VARBINARY(64) NOT NULL,
+  task_id VARBINARY(64) NULL,
+  correlation_id VARBINARY(64) NULL,
+  registered_at DATETIME(6) NOT NULL,
+  sdk_root_span_id BINARY(8) NULL,
+  sdk_root_producer_id VARBINARY(64) NULL,
+  sdk_accept_until DATETIME(6) NULL,
+  run_state ENUM('unknown','running','completed','failed','cancelled') NOT NULL DEFAULT 'unknown',
+  observed_start_ns BIGINT UNSIGNED NULL,
+  observed_end_ns BIGINT UNSIGNED NULL,
+  expires_at DATETIME(6) NOT NULL,
+  PRIMARY KEY (tenant_id, environment_id, project_id, trace_id),
+  CONSTRAINT fk_trace_session FOREIGN KEY (tenant_id, environment_id, project_id, session_id) REFERENCES sessions (tenant_id, environment_id, project_id, session_id) ON DELETE CASCADE,
+  UNIQUE KEY uk_trace_run (tenant_id, environment_id, project_id, session_id, run_kind, run_key),
+  KEY ix_trace_session (tenant_id, environment_id, project_id, session_id, registered_at, trace_id),
+  KEY ix_trace_expiry (expires_at),
+  CHECK ((sdk_root_span_id IS NULL) = (sdk_accept_until IS NULL)),
+  CHECK ((sdk_root_span_id IS NULL) = (sdk_root_producer_id IS NULL))
+) ENGINE=InnoDB;
+
+CREATE TABLE trace_producers (
+  tenant_id VARBINARY(64) NOT NULL,
+  environment_id VARBINARY(64) NOT NULL,
+  project_id VARBINARY(64) NOT NULL,
+  trace_id BINARY(16) NOT NULL,
+  producer_id VARBINARY(64) NOT NULL,
+  agent_id VARBINARY(64) NOT NULL,
+  registered_at DATETIME(6) NOT NULL,
+  revoked_at DATETIME(6) NULL,
+  PRIMARY KEY (tenant_id, environment_id, project_id, trace_id, producer_id, agent_id),
+  CONSTRAINT fk_producer_trace FOREIGN KEY (tenant_id, environment_id, project_id, trace_id) REFERENCES traces (tenant_id, environment_id, project_id, trace_id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE spans (
+  tenant_id VARBINARY(64) NOT NULL,
+  environment_id VARBINARY(64) NOT NULL,
+  project_id VARBINARY(64) NOT NULL,
+  trace_id BINARY(16) NOT NULL,
+  span_id BINARY(8) NOT NULL,
+  parent_span_id BINARY(8) NULL,
+  producer_id VARBINARY(64) NOT NULL,
+  agent_id VARBINARY(64) NOT NULL,
+  kind ENUM('run','agent','llm','tool_client') NOT NULL,
+  start_ns BIGINT UNSIGNED NOT NULL,
+  end_ns BIGINT UNSIGNED NOT NULL,
+  status ENUM('unset','ok','error') NOT NULL DEFAULT 'unset',
+  run_outcome ENUM('completed','failed','cancelled') NULL,
+  tool_id VARBINARY(64) NULL,
+  tool_route ENUM('gateway','local','direct') NULL,
+  client_call_id VARBINARY(64) NULL,
+  client_result ENUM('response','timeout','error','cancelled') NULL,
+  response_code SMALLINT UNSIGNED NULL,
+  error_code VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  model_id VARBINARY(64) NULL,
+  input_tokens INT UNSIGNED NULL,
+  output_tokens INT UNSIGNED NULL,
+  max_output_tokens INT UNSIGNED NULL,
+  temperature DECIMAL(6,4) NULL,
+  received_at DATETIME(6) NOT NULL,
+  metadata_hash BINARY(32) NOT NULL,
+  PRIMARY KEY (tenant_id, environment_id, project_id, trace_id, span_id),
+  CONSTRAINT fk_span_trace FOREIGN KEY (tenant_id, environment_id, project_id, trace_id) REFERENCES traces (tenant_id, environment_id, project_id, trace_id) ON DELETE CASCADE,
+  KEY ix_span_timeline (tenant_id, environment_id, project_id, trace_id, start_ns, span_id),
+  KEY ix_span_parent (tenant_id, environment_id, project_id, trace_id, parent_span_id, span_id),
+  CHECK (end_ns &gt;= start_ns),
+  CHECK (parent_span_id IS NULL OR parent_span_id &lt;&gt; span_id),
+  CHECK (kind = 'run' OR run_outcome IS NULL),
+  CHECK ((kind = 'tool_client') = (tool_route IS NOT NULL)),
+  CHECK (client_call_id IS NULL OR (tool_route IS NOT NULL AND tool_route = 'gateway'))
+) ENGINE=InnoDB;
+
+CREATE TABLE span_links (
+  tenant_id VARBINARY(64) NOT NULL,
+  environment_id VARBINARY(64) NOT NULL,
+  project_id VARBINARY(64) NOT NULL,
+  trace_id BINARY(16) NOT NULL,
+  span_id BINARY(8) NOT NULL,
+  target_trace_id BINARY(16) NOT NULL,
+  target_span_id BINARY(8) NOT NULL,
+  PRIMARY KEY (tenant_id, environment_id, project_id, trace_id, span_id, target_trace_id, target_span_id),
+  CONSTRAINT fk_link_source FOREIGN KEY (tenant_id, environment_id, project_id, trace_id, span_id) REFERENCES spans (tenant_id, environment_id, project_id, trace_id, span_id) ON DELETE CASCADE,
+  KEY ix_link_target (tenant_id, environment_id, project_id, target_trace_id, target_span_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE tool_calls (
+  tenant_id VARBINARY(64) NOT NULL,
+  environment_id VARBINARY(64) NOT NULL,
+  project_id VARBINARY(64) NOT NULL,
+  call_id VARBINARY(64) NOT NULL,
+  trace_id BINARY(16) NOT NULL,
+  agent_id VARBINARY(64) NULL,
+  tool_id VARBINARY(64) NOT NULL,
+  operation_id VARBINARY(64) NOT NULL,
+  operation_version VARBINARY(64) NULL,
+  inbound_sdk_span_id BINARY(8) NULL,
+  caller_kind ENUM('user','workload','unknown') NOT NULL DEFAULT 'unknown',
+  caller_id VARBINARY(64) NULL,
+  delegation_id VARBINARY(64) NULL,
+  downstream_actor_id VARBINARY(64) NULL,
+  authorization_id VARBINARY(64) NULL,
+  permission_epoch BIGINT UNSIGNED NULL,
+  credential_ref_id VARBINARY(64) NULL,
+  credential_audience_id VARBINARY(64) NULL,
+  resource_ref_id VARBINARY(64) NULL,
+  destination_ref_id VARBINARY(64) NULL,
+  classification_code VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  started_at DATETIME(6) NOT NULL,
+  initial_decision ENUM('allowed','blocked','denied','confirmation_required') NULL,
+  recheck_decision ENUM('allowed','blocked','denied','confirmation_required') NULL,
+  recheck_revision BIGINT UNSIGNED NULL,
+  PRIMARY KEY (tenant_id, environment_id, project_id, call_id),
+  CONSTRAINT fk_call_trace FOREIGN KEY (tenant_id, environment_id, project_id, trace_id) REFERENCES traces (tenant_id, environment_id, project_id, trace_id) ON DELETE CASCADE,
+  KEY ix_call_timeline (tenant_id, environment_id, project_id, trace_id, started_at, call_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE confirmations (
+  tenant_id VARBINARY(64) NOT NULL,
+  environment_id VARBINARY(64) NOT NULL,
+  project_id VARBINARY(64) NOT NULL,
+  confirmation_id VARBINARY(64) NOT NULL,
+  call_id VARBINARY(64) NOT NULL,
+  state ENUM('pending','approved','denied','expired') NOT NULL,
+  revision BIGINT UNSIGNED NOT NULL,
+  actor_id VARBINARY(64) NULL,
+  deadline_at DATETIME(6) NOT NULL,
+  action_at DATETIME(6) NULL,
+  hold_until DATETIME(6) NULL,
+  PRIMARY KEY (tenant_id, environment_id, project_id, confirmation_id),
+  CONSTRAINT fk_confirmation_call FOREIGN KEY (tenant_id, environment_id, project_id, call_id) REFERENCES tool_calls (tenant_id, environment_id, project_id, call_id) ON DELETE CASCADE,
+  UNIQUE KEY uk_confirmation_call (tenant_id, environment_id, project_id, call_id)
+) ENGINE=InnoDB;
+
+CREATE TABLE execution_attempts (
+  tenant_id VARBINARY(64) NOT NULL,
+  environment_id VARBINARY(64) NOT NULL,
+  project_id VARBINARY(64) NOT NULL,
+  call_id VARBINARY(64) NOT NULL,
+  attempt_id VARBINARY(64) NOT NULL,
+  attempt_no INT UNSIGNED NOT NULL,
+  state ENUM('executing','succeeded','failed','unknown') NOT NULL,
+  revision BIGINT UNSIGNED NOT NULL,
+  started_at DATETIME(6) NOT NULL,
+  finished_at DATETIME(6) NULL,
+  downstream_request_id VARBINARY(64) NULL,
+  downstream_actor_id VARBINARY(64) NULL,
+  evidence_ref_id VARBINARY(64) NULL,
+  hold_until DATETIME(6) NULL,
+  PRIMARY KEY (tenant_id, environment_id, project_id, call_id, attempt_id),
+  CONSTRAINT fk_attempt_call FOREIGN KEY (tenant_id, environment_id, project_id, call_id) REFERENCES tool_calls (tenant_id, environment_id, project_id, call_id) ON DELETE CASCADE,
+  UNIQUE KEY uk_attempt_no (tenant_id, environment_id, project_id, call_id, attempt_no),
+  CHECK (attempt_no &gt; 0),
+  CHECK (finished_at IS NULL OR finished_at &gt;= started_at)
+) ENGINE=InnoDB;
+
+CREATE TABLE audit_events (
+  tenant_id VARBINARY(64) NOT NULL,
+  environment_id VARBINARY(64) NOT NULL,
+  project_id VARBINARY(64) NOT NULL,
+  source_role ENUM('gateway','confirmation','executor') NOT NULL,
+  source_id VARBINARY(64) NOT NULL,
+  event_id VARBINARY(64) NOT NULL,
+  call_id VARBINARY(64) NOT NULL,
+  stream_key VARBINARY(160) NOT NULL,
+  revision BIGINT UNSIGNED NOT NULL,
+  event_kind ENUM('initial_decision','recheck','confirmation','attempt') NOT NULL,
+  confirmation_id VARBINARY(64) NULL,
+  attempt_id VARBINARY(64) NULL,
+  decision ENUM('allowed','blocked','denied','confirmation_required') NULL,
+  confirmation_state ENUM('pending','approved','denied','expired') NULL,
+  execution_state ENUM('executing','succeeded','failed','unknown') NULL,
+  confirmation_actor_id VARBINARY(64) NULL,
+  confirmation_deadline_at DATETIME(6) NULL,
+  confirmation_action_at DATETIME(6) NULL,
+  attempt_no INT UNSIGNED NULL,
+  attempt_started_at DATETIME(6) NULL,
+  attempt_finished_at DATETIME(6) NULL,
+  downstream_request_id VARBINARY(64) NULL,
+  downstream_actor_id VARBINARY(64) NULL,
+  hold_until DATETIME(6) NULL,
+  policy_id VARBINARY(64) NULL,
+  policy_version VARBINARY(64) NULL,
+  reason_code VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  evidence_ref_id VARBINARY(64) NULL,
+  schema_version SMALLINT UNSIGNED NOT NULL,
+  occurred_at DATETIME(6) NOT NULL,
+  received_at DATETIME(6) NOT NULL,
+  event_hash BINARY(32) NOT NULL,
+  PRIMARY KEY (tenant_id, environment_id, project_id, source_role, source_id, event_id),
+  CONSTRAINT fk_event_call FOREIGN KEY (tenant_id, environment_id, project_id, call_id) REFERENCES tool_calls (tenant_id, environment_id, project_id, call_id) ON DELETE CASCADE,
+  UNIQUE KEY uk_event_revision (tenant_id, environment_id, project_id, source_role, source_id, stream_key, revision),
+  KEY ix_event_history (tenant_id, environment_id, project_id, call_id, occurred_at, source_role, source_id, event_id),
+  CHECK (
+      (source_role = 'gateway' AND event_kind IN ('initial_decision','recheck')
+        AND decision IS NOT NULL AND confirmation_state IS NULL AND execution_state IS NULL
+        AND confirmation_id IS NULL AND attempt_id IS NULL)
+      OR (source_role = 'confirmation' AND event_kind = 'confirmation'
+        AND decision IS NULL AND confirmation_state IS NOT NULL AND execution_state IS NULL
+        AND confirmation_id IS NOT NULL AND attempt_id IS NULL)
+      OR (source_role = 'executor' AND event_kind = 'attempt'
+        AND decision IS NULL AND confirmation_state IS NULL AND execution_state IS NOT NULL
+        AND confirmation_id IS NULL AND attempt_id IS NOT NULL)
+    )
+) ENGINE=InnoDB;
+
+CREATE TABLE deletion_marks (
+  tenant_id VARBINARY(64) NOT NULL,
+  environment_id VARBINARY(64) NOT NULL,
+  project_id VARBINARY(64) NOT NULL,
+  object_kind ENUM('trace','session') NOT NULL,
+  object_id VARBINARY(64) NOT NULL,
+  deleted_at DATETIME(6) NOT NULL,
+  retain_until DATETIME(6) NOT NULL,
+  reason ENUM('expired','deleted') NOT NULL,
+  PRIMARY KEY (tenant_id, environment_id, project_id, object_kind, object_id),
+  KEY ix_delete_expiry (retain_until),
+  CHECK (object_kind &lt;&gt; 'trace' OR OCTET_LENGTH(object_id) = 16),
+  CHECK (retain_until &gt; deleted_at)
+) ENGINE=InnoDB;
+</code></pre>
+      </details>
+    </section>
+    <footer><a href="tracing-architecture.md">查看完整架构设计</a> · <a href="tracing-sdk.md">查看 SDK API 设计</a></footer>
   </main>
 </body>
 </html>
