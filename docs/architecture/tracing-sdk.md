@@ -196,7 +196,7 @@ SDK 使用标准上下文传播和 OTLP exporter。V1 配置完整的 Trace URL 
 
 **拟定的 HTTP 适配。** 由网关在已分配调用 ID 后的业务响应中设置 `x-dubhe-call-id`。SDK 通过工具客户端适配器读取，适用于正常响应、策略拒绝或待确认等已形成调用记录的响应。代理转发时保留该头。没有可信响应头时调用 ID 为空。其他消费方式可复用相同的业务语义，通过适配器把可信响应元数据转成 `recordResponse()`。
 
-网关从已验证的 `traceparent.parent-id` 获取 `ToolCall.span_id`。SDK 把响应中的调用 ID 记在工具 Span 的 `metadata.client_call_id`。合并时核对归属、可信 Trace、执行 Agent、`call_id` 和 SDK Span ID。匹配后的网关主节点按 SDK Span 的 `parent_span_id` 挂树。同一幂等键的请求重试沿用原 `call_id`，重新创建客户端工具 Span 时则生成新的 `span_id`。如果重试拿回原 `call_id` 而 Span ID 不匹配，仍显示为单独的客户端尝试。网关为新的下游执行在转发前持久化 `ExecutionAttempt`。如果只是返回旧状态，沿用已有执行记录。
+网关从已验证的 `traceparent.parent-id` 获取 `ToolCall.span_id`。SDK 把响应中的调用 ID 记在工具 Span 的 `metadata.client_call_id`。合并时核对归属、可信 Trace、执行 Agent、`call_id` 和 SDK Span ID。匹配后的网关主节点按 SDK Span 的 `parent_span_id` 挂树。同一幂等键的请求重试沿用原 `call_id`，重新创建客户端工具 Span 时则生成新的 `span_id`。如果重试拿回原 `call_id` 而 Span ID 不匹配，仍显示为单独的客户端尝试。V1 网关每个 `call_id` 最多转发一次。同键重传返回已持久化的调用状态。网关在转发前同一事务更新 `ToolCall.execution_state` 并写入转发意图的审计事件。
 
 OpenTelemetry 建议为每次实际发送 HTTP 请求创建独立的客户端 Span。因此按尝试埋点时，每次业务重试都会生成新的 `span_id`。HTTP 客户端未暴露单次尝试时，规范允许使用一个外层客户端 Span。OTLP 导出重试发送同一批已完成的 Span，沿用原 ID。网关的 `call_id` 和幂等规则属于业务协议。 [HTTP Span 规范](https://opentelemetry.io/docs/specs/semconv/http/http-spans/#http-client-span) · [OTLP 重试规范](https://opentelemetry.io/docs/specs/otlp/#all-other-responses)
 

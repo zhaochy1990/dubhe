@@ -157,11 +157,11 @@
     </div>
     <section class="data-model" id="data-model" aria-labelledby="data-model-title">
       <h2 id="data-model-title">实体与主要属性</h2>
-      <p>Session 可包含多个 Trace。Span 记录 LLM 调用与客户端工具观测。网关的 ToolCall 记录工具参数，并关联人工确认、执行尝试和审计事件。</p>
+      <p>Session 可包含多个 Trace。Span 记录 LLM 调用与客户端工具观测。ToolCall 保存网关调用的参数和执行状态，并关联人工确认与审计事件。</p>
       <div class="diagram model-diagram" role="region" aria-label="可横向滚动的 Tracing ER 图" tabindex="0">
-        <svg viewBox="0 0 1120 828" role="img" aria-labelledby="tracing-er-title tracing-er-desc" xmlns="http://www.w3.org/2000/svg">
+        <svg viewBox="0 0 1120 607" role="img" aria-labelledby="tracing-er-title tracing-er-desc" xmlns="http://www.w3.org/2000/svg">
           <title id="tracing-er-title">Agent Tracing 实体关系图</title>
-          <desc id="tracing-er-desc">会话关联多条 Trace。Span 以 metadata 记录调用详情。网关 ToolCall 可记录参数和客户端 Span ID，可有零或一个人工确认单，以及多次执行尝试和多条审计事件。Span 可以有一个父节点和多个子节点。</desc>
+          <desc id="tracing-er-desc">会话关联多条 Trace。Span 以 metadata 记录调用详情。网关 ToolCall 保存执行状态，可记录参数和客户端 Span ID，可有零或一个人工确认单以及多条审计事件。Span 可以有一个父节点和多个子节点。</desc>
 
           <path class="path er-relationship" d="M 328 116 H 412"/>
           <text class="er-cardinality" x="344" y="106" text-anchor="middle">1</text>
@@ -191,10 +191,6 @@
           <text class="er-cardinality" x="724" y="420" text-anchor="middle">1</text>
           <text class="er-cardinality" x="771" y="420" text-anchor="middle">0..1</text>
           <text class="er-meaning" x="750" y="454" text-anchor="middle">请求确认</text>
-          <path class="path er-relationship" d="M 560 550 V 612"/>
-          <text class="er-cardinality" x="573" y="568" text-anchor="middle">1</text>
-          <text class="er-cardinality" x="583" y="602" text-anchor="middle">0..*</text>
-          <text class="er-meaning" x="628" y="586" text-anchor="middle">发起执行</text>
 
           <g class="node er-node">
             <rect x="32" y="40" width="296" height="160" rx="8"/>
@@ -267,7 +263,7 @@
           </g>
 
           <g class="node er-node focus">
-            <rect x="412" y="340" width="296" height="210" rx="8"/>
+            <rect x="412" y="340" width="296" height="235" rx="8"/>
             <text class="name" x="428" y="368">ToolCall</text>
             <path class="er-divider" d="M 412 384 H 708"/>
             <text class="er-key" x="426" y="407">PK</text>
@@ -284,6 +280,8 @@
             <text class="er-description" x="694" y="507" text-anchor="end">SDK 工具 Span ID，可空</text>
             <text class="er-attribute" x="461" y="532">parameters</text>
             <text class="er-description" x="694" y="532" text-anchor="end">策略判定参数（JSON）</text>
+            <text class="er-attribute" x="461" y="557">execution_state</text>
+            <text class="er-description" x="694" y="557" text-anchor="end">下游执行状态</text>
           </g>
 
           <g class="node er-node">
@@ -304,23 +302,6 @@
             <text class="er-description" x="1074" y="507" text-anchor="end">确认截止时间</text>
           </g>
 
-          <g class="node er-node">
-            <rect x="412" y="612" width="296" height="185" rx="8"/>
-            <text class="name" x="428" y="640">ExecutionAttempt</text>
-            <path class="er-divider" d="M 412 656 H 708"/>
-            <text class="er-key" x="426" y="679">PK</text>
-            <text class="er-attribute" x="461" y="679">call_id + attempt_id</text>
-            <text class="er-description" x="694" y="679" text-anchor="end">尝试标识</text>
-            <text class="er-key" x="426" y="704">FK</text>
-            <text class="er-attribute" x="461" y="704">call_id</text>
-            <text class="er-description" x="694" y="704" text-anchor="end">关联工具调用</text>
-            <text class="er-attribute" x="461" y="729">attempt_no</text>
-            <text class="er-description" x="694" y="729" text-anchor="end">执行尝试序号</text>
-            <text class="er-attribute" x="461" y="754">state</text>
-            <text class="er-description" x="694" y="754" text-anchor="end">执行结果</text>
-            <text class="er-attribute" x="461" y="779">evidence_ref_id</text>
-            <text class="er-description" x="694" y="779" text-anchor="end">执行回执或对账证据</text>
-          </g>
         </svg>
       </div>
       <p class="er-legend"><span><b>PK</b> 标识键 · <b>FK</b> 关联键</span><span><b>1</b> 恰好一个 · <b>0..1</b> 零或一个 · <b>0..*</b> 零或多个 · <b>1..*</b> 一个或多个</span></p>
