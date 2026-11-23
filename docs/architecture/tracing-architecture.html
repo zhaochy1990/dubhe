@@ -43,11 +43,11 @@
 <body>
   <main>
     <h1>Agent Tracing 系统架构</h1>
-    <p>Agent SDK 补充运行步骤。执行侧先保存审计证据，再异步生成控制台视图。</p>
+    <p>V1 外部上报仅接收 OTLP/HTTP Trace。执行侧先保存审计证据，再通过内部 Outbox 异步更新控制台视图。</p>
     <div class="diagram" role="region" aria-label="可横向滚动的系统架构图" tabindex="0">
       <svg viewBox="0 0 1120 528" role="img" aria-labelledby="tracing-architecture-title tracing-architecture-desc" xmlns="http://www.w3.org/2000/svg">
         <title id="tracing-architecture-title">Agent Tracing 采集、审计与查询</title>
-        <desc id="tracing-architecture-desc">Agent SDK 上报运行遥测并另行调用工具网关，网关及确认服务持久化审计，投影合并两路数据，控制台经授权读取 Trace 或按调用 ID 查证。</desc>
+        <desc id="tracing-architecture-desc">Agent SDK 通过 OTLP/HTTP 上报 Trace 并另行调用工具网关，网关及确认服务持久化审计，投影合并两路数据，控制台经授权读取 Trace 或按调用 ID 查证。</desc>
         <defs>
           <marker id="tracing-architecture-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#42605e"/>
@@ -90,7 +90,7 @@
         </g>
         <g class="node focus">
           <rect x="316" y="88" width="200" height="88" rx="8"/>
-          <text class="name" x="332" y="117">遥测接入</text>
+          <text class="name" x="332" y="117">OTLP Trace 接入</text>
           <text class="detail" x="332" y="143">验证身份和归属</text>
           <text class="detail" x="332" y="162">校验脱敏、限流、持久接收</text>
         </g>
