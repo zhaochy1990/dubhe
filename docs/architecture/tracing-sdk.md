@@ -25,7 +25,10 @@ export interface TraceScope {
 }
 
 /** 运行时持有的上下文，在公开 API 里作为不透明句柄。 */
+declare const contextBrand: unique symbol
+
 export interface TraceContext {
+  readonly [contextBrand]: true
   readonly traceId: string
 }
 
@@ -70,7 +73,7 @@ export interface RunBinding {
 
 export type PrepareRunResult =
   | { outcome: 'started'; binding: RunBinding }
-  | { outcome: 'already_started' }
+  | { outcome: 'already_bound' }
 
 export interface HandoffTarget {
   agentId: OpaqueId
@@ -88,6 +91,7 @@ export interface TrustedTracingHost {
     options: RunOptions,
     ids: Pick<VerifiedRun, 'traceId' | 'rootSpanId' | 'registeredAt'>
   ): Promise<PrepareRunResult>
+  resumeHandoff(options: RunOptions): Promise<Handoff>
   issueHandoff(
     binding: RunBinding,
     carrier: Readonly<Record<string, string>>,
@@ -153,15 +157,16 @@ export interface TracingSdk {
 export declare function createTracingSdk(options: TracingOptions): TracingSdk
 ```
 
-`TraceScope`、会话起始时间、签名凭据及生产者授权来自宿主验证后的会话和工作负载上下文，通过 `TrustedTracingHost` 提供。业务调用方只传业务 ID，授权字段由宿主求得。业务代码把 `TraceContext` 和 `Handoff` 当作只读句柄，在同一次运行中使用，避免将凭据或 carrier 记入日志。
+`TraceScope`、会话起始时间、签名凭据及生产者授权来自宿主验证后的会话和工作负载上下文，通过 `TrustedTracingHost` 提供。业务调用方只传业务 ID，授权字段由宿主求得。业务代码把 `TraceContext` 和 `Handoff` 当作只读句柄，在同一次运行中使用。接入方法只接受本 SDK 实例生成的 TraceContext；跨进程通过 Handoff 验证并恢复。避免将凭据或 carrier 记入日志。
 
 ## 2. 运行、登记与传播
 
-1. `run` 创建候选 OTel 根 Span，随后由宿主 `prepareRun` 在可信执行域按归属、Session、运行类别和运行 ID 原子认领。认领成功后才签发凭据和执行新的业务回调。发现已有运行时返回 `RUN_ALREADY_STARTED`，候选根不导出。已有执行走经宿主恢复的可信分派，通过 `continueRun` 继续原 Trace。宿主认领独立于 Tracing 库。
-2. 同一个不可变的 `registeredAt` 用于签发的业务关联和异步登记。SDK 调用 `registration.register`，重复登记使用相同绑定。登记包含根 Span ID、根生产者、根 Agent 和各项生产者授权。Tracing 登记暂时失败时，宿主已经认领的业务分派和网关校验照常进行。SDK 异步重试登记，未确认的 Span 在本地有界缓冲中等待。
-3. `handoff` 从当前 Span 注入 W3C Context，宿主按目标 Agent 和生产者签发受限的分派凭据，经可信内部通道交给目标工作负载。`continueRun` 先验证分派目标、过期时间和作用域，再检查 carrier 的 Trace ID 与凭据一致。无效分派在执行回调前返回校验错误。子工作负载以已验证的目标 Agent 为当前 Agent。续签由宿主按原 Trace 和授权范围处理，OTLP 凭据与业务关联凭据在各自通道使用。
-4. 可信 Trace 登记成功后才允许 SDK 导出。远端工作负载通过 `waitUntilRegistered` 异步等待同一已验证 Trace。没有登记权限、登记永久失败或超过接收截止时丢弃待发送遥测并计数。根 Span 结束后，只要还在接收窗口内，已登记的子 Span 仍可抵达。采集故障不会重新运行回调。
-5. `withAgent`、`withModel` 和 `withTool` 各自以传入上下文创建一个子 Span。并行任务共享同一父上下文。`withAgent` 切换当前 Agent，后续模型和工具 Span 继承它，接入仍核验生产者是否获准上报该 Agent。回调成功、抛出或取消时在 `finally` 中结束 Span，原有返回值与异常持续传给调用方。根运行默认以正常返回或异常推导终态，根回调可用 `setOutcome` 标记业务已失败但正常返回的情况。取消依据宿主确认，根终态仅由可信登记中的根生产者和根 Agent 上报。
+1. `run` 创建候选 OTel 根 Span，随后由宿主 `prepareRun` 在可信执行域按归属、Session、运行类别和运行 ID 原子绑定 Trace。成功绑定后才签发凭据。已存在绑定时返回 `TRACE_ALREADY_BOUND`，丢弃候选根且不启动第二个根回调。这个返回值只说明 Trace 已绑定。业务执行、幂等和故障恢复继续由宿主的既有业务状态机负责。
+2. 宿主将原 Trace 绑定与已有业务分派关联后再执行回调。如果进程在绑定后、开始回调前退出，或绑定响应丢失，宿主先按自己的状态判断是否需要恢复。确认可恢复时，用 `resumeHandoff(options)` 取原 Trace 的授权分派，并从宿主持久化的原绑定继续未完成的登记，再用 `continueRun` 执行宿主允许的恢复回调。若原根 Span 未能导出，保持缺失根状态，可信入口可用内部运行状态事件补齐业务终态。
+3. 不变的 `sessionStartedAt` 和 `registeredAt` 同时用于签发的业务关联和异步登记。SDK 调用 `registration.register`，重复登记使用相同绑定。登记包含根 Span ID、根生产者、根 Agent 和各项生产者授权。Tracing 登记暂时失败时，宿主已授权的分派和网关校验照常进行。SDK 异步重试登记，未确认的 Span 在本地有界缓冲中等待。
+4. `handoff` 从当前 Span 注入 W3C Context，宿主按目标 Agent 和生产者签发受限的分派凭据，经可信内部通道交给目标工作负载。`continueRun` 先验证分派目标、过期时间和作用域，再检查 carrier 的 Trace ID 与凭据一致。无效分派在执行回调前返回校验错误。子工作负载以已验证的目标 Agent 为当前 Agent。续签由宿主按原 Trace 和授权范围处理，OTLP 凭据与业务关联凭据在各自通道使用。
+5. 可信 Trace 登记成功后才允许 SDK 导出。远端工作负载通过 `waitUntilRegistered` 异步等待同一已验证 Trace。没有登记权限、登记永久失败或超过接收截止时丢弃待发送遥测并计数。根 Span 结束后，只要还在接收窗口内，已登记的子 Span 仍可抵达。采集故障不会重新运行回调。
+6. `withAgent`、`withModel` 和 `withTool` 各自以传入上下文创建一个子 Span。并行任务共享同一父上下文。`withAgent` 切换当前 Agent，后续模型和工具 Span 继承它，接入仍核验生产者是否获准上报该 Agent。回调成功、抛出或取消时在 `finally` 中结束 Span，原有返回值与异常持续传给调用方。根运行默认以正常返回或异常推导终态，根回调可用 `setOutcome` 标记业务已失败但正常返回的情况。取消依据宿主确认，SDK 根终态仅由可信登记中的根生产者和根 Agent 上报。
 
 SDK 使用标准上下文传播和 OTLP exporter。V1 配置完整的 Trace URL 并使用 HTTP Protobuf 作为 SDK 默认序列化，接收端按 OTLP/HTTP 契约处理。工作负载鉴权 Header 从宿主获取，凭据更新不改变已登记的生产者身份。 [OpenTelemetry Trace API](https://opentelemetry.io/docs/specs/otel/trace/api/) · [W3C Trace Context](https://www.w3.org/TR/trace-context/) · [OTLP exporter 配置](https://opentelemetry.io/docs/specs/otel/protocol/exporter/)
 
@@ -236,4 +241,4 @@ Dubhe 以 `dubhe.*` 属性传输业务语义。跨进程身份仍通过认证与
 - 运行时采集与业务执行分开。缓冲满时丢弃新遥测并增加丢弃计数，SDK 的队列不调用网关，也不承担网关审计重放。
 - 只有 OTLP 可重试失败或连接中断才退避重发同一批次。成功响应根据协议处理部分成功，整批不重发。服务端按作用域、Trace ID 和 Span ID 幂等持久化。SDK 记录接收失败、超过截止、队列丢弃及拒绝数量，指标按受控原因分类。
 - `flush` 有调用方时限。队列排空表示本进程待处理记录已完成本地投递流程，包括失败终止或被拒绝的记录。它适合测试、短任务结束和应用退场。`shutdown` 停止接收新遥测再尽力排空，可重复调用。业务回调的行为继续由业务决定。
-- 验收覆盖多轮根 Trace、并行和跨进程父子关系、登记故障和恢复、SDK 重传、网关拒绝却有调用 ID、无响应超时、仅本地调用、两路数据的不同到达顺序、错误作用域及禁采属性不出现在真实 OTLP 包中。 [OTLP/HTTP 规范](https://opentelemetry.io/docs/specs/otlp/#otlphttp)
+- 验收覆盖多轮根 Trace、并行和跨进程父子关系、在绑定后开始回调前退出的宿主恢复、登记故障和恢复、SDK 重传、网关拒绝却有调用 ID、无响应超时、仅本地调用、两路数据的不同到达顺序、错误作用域及禁采属性不出现在真实 OTLP 包中。 [OTLP/HTTP 规范](https://opentelemetry.io/docs/specs/otlp/#otlphttp)

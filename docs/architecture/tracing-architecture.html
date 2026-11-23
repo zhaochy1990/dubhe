@@ -296,12 +296,12 @@
       <p>三列归属键统一为 <code>VARBINARY(64) NOT NULL</code>。平台及可信目录的不透明 ID 采用原有等值语义，超长值拒绝。Trace 和 Span ID 分别为 16 与 8 字节。业务时间使用 UTC <code>DATETIME(6)</code>，OTLP 时间保持 Unix 纳秒。JSON 查询响应将大整数时间原值编码成十进制字符串。</p>
       <details class="schema-table" id="table-sessions">
         <summary><code>sessions</code> · 会话列表及可信会话归属</summary>
-        <p>Session 按可信入口命名空间解析。显示名、MCP 协议 Session ID 和客户端自报身份无需进入主键。</p>
+        <p>Session 按可信入口命名空间解析。事件可乱序，所有轮次都携带同一可信会话开始时间。网关生成的回退 Session 使用执行侧首次登记时间。跨范围分页以开始时间、Session ID、租户、环境和项目组成稳定排序键。</p>
         <div class="table-scroll"><table>
           <thead><tr><th scope="col">字段</th><th scope="col">MySQL 类型</th><th scope="col">允许空值</th><th scope="col">语义</th></tr></thead>
           <tbody>
             <tr><th scope="row"><code>session_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>平台业务 Session ID</td></tr>
-            <tr><th scope="row"><code>root_agent_id</code></th><td><code>VARBINARY(64)</code></td><td>否</td><td>可信入口或网关确认的根 Agent</td></tr>
+            <tr><th scope="row"><code>root_agent_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>可信入口或网关确认的根 Agent。纯网关路径未核验时为空，只向获授权管理员展示</td></tr>
             <tr><th scope="row"><code>initiator_kind</code></th><td><code>ENUM(&#x27;user&#x27;,&#x27;workload&#x27;,&#x27;unknown&#x27;)</code></td><td>否</td><td>发起者类型</td></tr>
             <tr><th scope="row"><code>initiator_id</code></th><td><code>VARBINARY(64)</code></td><td>是</td><td>可信主体标识，未知时为空</td></tr>
             <tr><th scope="row"><code>started_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>可信会话开始时间，登记后固定</td></tr>
@@ -334,7 +334,8 @@
             <tr><th scope="row"><code>run_state</code></th><td><code>ENUM(&#x27;unknown&#x27;,&#x27;running&#x27;,&#x27;completed&#x27;,&#x27;failed&#x27;,&#x27;cancelled&#x27;)</code></td><td>否</td><td>可信入口或已登记根 Span 给出的运行状态</td></tr>
             <tr><th scope="row"><code>observed_start_ns</code></th><td><code>BIGINT UNSIGNED</code></td><td>是</td><td>已接收节点的最早观测时间，内部候选</td></tr>
             <tr><th scope="row"><code>observed_end_ns</code></th><td><code>BIGINT UNSIGNED</code></td><td>是</td><td>已接收节点的最晚观测时间，内部候选</td></tr>
-            <tr><th scope="row"><code>expires_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>常规到期与当前保留期限取较晚者</td></tr>
+            <tr><th scope="row"><code>base_expires_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>按可信原始登记时间确定的基础留存截止</td></tr>
+              <tr><th scope="row"><code>expires_at</code></th><td><code>DATETIME(6)</code></td><td>否</td><td>常规到期与当前保留期限取较晚者</td></tr>
           </tbody>
         </table></div>
         <p class="schema-note">键与索引</p>
@@ -575,7 +576,7 @@
       </details>
 
       <h3>网关事件契约</h3>
-      <p>内部消息使用版本 1。所有事件携带作用域、已验签的 Trace 绑定与登记时间、Session 与轮次、可信调用元数据、调用 ID、事实源身份、事件 ID、修订号和发生时间。稳定的公共字段包含归属、Trace 绑定、call_id、受理时间、工具与操作 ID。尚缺的身份或证据引用由拥有该字段的事实源补齐。状态快照按以下流分开递增。</p>
+      <p>内部消息使用版本 1。所有事件携带作用域、可信 Trace 绑定及登记时间、Session 与开始时间、轮次、可信调用元数据、调用 ID、事实源身份、事件 ID、修订号和发生时间。绑定可以来自已验签的应用关联凭据，或来自已认证请求在网关执行域首次登记的回退关联。稳定的公共字段包含归属、Trace 绑定、call_id、受理时间、工具与操作 ID。尚缺的身份或证据引用由拥有该字段的事实源补齐。状态快照按以下流分开递增。</p>
       <div class="table-scroll"><table>
         <thead><tr><th scope="col">事件</th><th scope="col">事实源与修订范围</th><th scope="col">事件特有字段</th></tr></thead>
         <tbody>
@@ -593,7 +594,7 @@
         <li><strong>Outbox。</strong> 校验事实源与事件类型，锁定对应 Trace 并写入审计历史和快照。同一事件重放不改变记录。较旧修订进入历史，最新快照由对应流的较大修订更新。确认、尝试和复验各自维护状态。MySQL 提交后才确认 Outbox。未知版本和结构错误进入执行侧诊断，保留来源及原因码。</li>
         <li><strong>工具节点。</strong> 对齐归属、<code>trace_id</code>、<code>agent_id</code> 和 <code>call_id</code>，再比较 <code>inbound_sdk_span_id = spans.span_id</code>。匹配后使用网关节点 ID，沿 SDK Span 的 <code>parent_span_id</code> 挂树并补客户端耗时。SDK 或审计先到都能展示。两边匹配后用同一节点计数，只有 SDK 时按客户端观测展示，工具路径来自受控枚举。幂等重试即使收到原 call_id，也要匹配网关记录的原入站 Span ID，否则继续显示为独立客户端尝试。</li>
         <li><strong>状态与授权。</strong> 网关初始决策、最新复验、确认和最新执行尝试分别保留。阻断或拒绝且有证据表明未尝试时显示未执行。缺少结果时显示未知。所有跨表读取同时匹配归属与对象 ID，授权后才组树、计算 Session 结果及可见调用数。节点使用 <code>span:</code> 或 <code>tool:</code> 开头的独立 ID，SDK 已匹配时在本 Trace 内解析到对应的工具主节点。无权读取时使用统一的不可用响应。</li>
-        <li><strong>留存。</strong> 基础到期从可信原始登记起算 30 天。只对清理前已消费到的确认和对账事件，按可信的有限 <code>hold_until</code> 延长留存。到期后收到的事件仍可在网关审计域按调用 ID 查阅。写入与清理使用同样的归属及对象锁顺序，将删除标记与删除写在同一事务。重放遵守原始到期和删除标记，恢复时先恢复独立保留的删除增量。</li>
+        <li><strong>留存。</strong> 基础到期 <code>base_expires_at</code> 从可信原始登记起算，试点为 30 天。只对清理前已消费到的确认和对账事件，按可信的有限 <code>hold_until</code> 延长 <code>expires_at</code>。基础到期后拒绝新的 SDK Span，并清除 Span、Links、生产者授权明细、SDK 根引用及接收窗口、派生区间和其他普通调用。延长期仅保留 Session 和 Trace 定位字段、仍需保留的调用状态、确认或尝试标识及相关审计引用。拒绝过期重放。超期收到的事件仍可在网关审计域按调用 ID 查阅。写入与清理使用同样的归属及对象锁顺序，将删除标记与删除写在同一事务。重放遵守原始到期和删除标记，恢复时先恢复独立保留的删除增量。</li>
       </ol>
       <p class="schema-note">应用层校验字节 ID、允许字段、关系和授权组合。建表草案用于评审及本地验证，主键、类型、索引与约束可直接在 MySQL 8.4 验证。</p>
       <details class="schema-table">
@@ -603,7 +604,7 @@
   environment_id VARBINARY(64) NOT NULL,
   project_id VARBINARY(64) NOT NULL,
   session_id VARBINARY(64) NOT NULL,
-  root_agent_id VARBINARY(64) NOT NULL,
+  root_agent_id VARBINARY(64) NULL,
   initiator_kind ENUM('user','workload','unknown') NOT NULL DEFAULT 'unknown',
   initiator_id VARBINARY(64) NULL,
   started_at DATETIME(6) NOT NULL,
@@ -630,6 +631,7 @@ CREATE TABLE traces (
   run_state ENUM('unknown','running','completed','failed','cancelled') NOT NULL DEFAULT 'unknown',
   observed_start_ns BIGINT UNSIGNED NULL,
   observed_end_ns BIGINT UNSIGNED NULL,
+  base_expires_at DATETIME(6) NOT NULL,
   expires_at DATETIME(6) NOT NULL,
   PRIMARY KEY (tenant_id, environment_id, project_id, trace_id),
   CONSTRAINT fk_trace_session FOREIGN KEY (tenant_id, environment_id, project_id, session_id) REFERENCES sessions (tenant_id, environment_id, project_id, session_id) ON DELETE CASCADE,
@@ -637,7 +639,8 @@ CREATE TABLE traces (
   KEY ix_trace_session (tenant_id, environment_id, project_id, session_id, registered_at, trace_id),
   KEY ix_trace_expiry (expires_at),
   CHECK ((sdk_root_span_id IS NULL) = (sdk_accept_until IS NULL)),
-  CHECK ((sdk_root_span_id IS NULL) = (sdk_root_producer_id IS NULL))
+  CHECK ((sdk_root_span_id IS NULL) = (sdk_root_producer_id IS NULL)),
+  CHECK (expires_at &gt;= base_expires_at)
 ) ENGINE=InnoDB;
 
 CREATE TABLE trace_producers (
