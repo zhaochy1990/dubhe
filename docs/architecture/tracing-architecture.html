@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Tracing 系统架构</title>
+  <style>
+    :root {
+      --paper: #f4f7f5;
+      --ink: #18293a;
+      --muted: #526a77;
+      --line: #b1c4c0;
+      --accent: #087f70;
+      --accent-paper: #e3f3ee;
+      --sans: "Geist", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: clamp(20px, 4vw, 60px); color: var(--ink); background: var(--paper); font: 16px/1.55 var(--sans); }
+    main { max-width: 1160px; margin: 0 auto; }
+    h1 { margin: 0 0 8px; font: 500 clamp(28px, 4vw, 42px)/1.2 "Instrument Serif", "Songti SC", serif; }
+    p { margin: 0 0 20px; color: var(--muted); }
+    .diagram { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: #fbfdfc; }
+    .diagram:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+    svg { display: block; width: 100%; min-width: 1120px; font-family: var(--sans); }
+    .zone { fill: #f1f6f3; stroke: var(--line); stroke-dasharray: 5 4; }
+    .node rect { fill: #fff; stroke: var(--line); }
+    .node.focus rect { fill: var(--accent-paper); stroke: var(--accent); }
+    .node text { fill: var(--ink); }
+    .node .name { font-size: 17px; font-weight: 650; }
+    .node .detail, .label, .zone-title, .legend { fill: var(--muted); font-size: 13px; }
+    .zone-title { font-weight: 650; }
+    .path { fill: none; stroke: #42605e; stroke-width: 1.4; }
+    .async { stroke-dasharray: 5 4; }
+    a { color: var(--accent); text-underline-offset: 4px; }
+    footer { margin-top: 12px; font-size: 14px; }
+    @media print {
+      body { padding: 0; }
+      .diagram { overflow: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Agent Tracing 系统架构</h1>
+    <p>Agent SDK 补充运行步骤。执行侧先保存审计证据，再异步生成控制台视图。</p>
+    <div class="diagram" role="region" aria-label="可横向滚动的系统架构图" tabindex="0">
+      <svg viewBox="0 0 1120 528" role="img" aria-labelledby="tracing-architecture-title tracing-architecture-desc" xmlns="http://www.w3.org/2000/svg">
+        <title id="tracing-architecture-title">Agent Tracing 采集、审计与查询</title>
+        <desc id="tracing-architecture-desc">Agent SDK 上报运行遥测并另行调用工具网关，网关及确认服务持久化审计，投影合并两路证据，控制台经授权查询读取 Trace。</desc>
+        <defs>
+          <marker id="tracing-architecture-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#42605e"/>
+          </marker>
+        </defs>
+
+        <rect class="zone" x="24" y="28" width="224" height="444" rx="8"/>
+        <text class="zone-title" x="44" y="58">平台客户端</text>
+        <rect class="zone" x="288" y="28" width="808" height="444" rx="8"/>
+        <text class="zone-title" x="308" y="58">平台执行与观测</text>
+
+        <g marker-end="url(#tracing-architecture-arrow)">
+          <path class="path" d="M 228 132 H 316"/>
+          <path class="path" d="M 228 160 H 256 Q 264 160 264 168 V 260 Q 264 268 272 268 H 316"/>
+          <path class="path" d="M 516 132 H 600"/>
+          <path class="path" d="M 516 268 H 600"/>
+          <path class="path async" d="M 700 224 V 176"/>
+          <path class="path" d="M 800 132 H 884"/>
+          <path class="path" d="M 228 404 H 600"/>
+          <path class="path" d="M 800 404 H 968 Q 976 404 976 396 V 176"/>
+        </g>
+        <g class="label" text-anchor="middle">
+          <text x="272" y="123">OTLP/HTTP</text>
+          <text x="302" y="214">工具请求</text>
+          <text x="558" y="123">遥测批次</text>
+          <text x="558" y="259">事务写入</text>
+          <text x="736" y="205">重放</text>
+          <text x="842" y="123">更新视图</text>
+          <text x="414" y="395">列表、调用树、详情</text>
+          <text x="888" y="395">项目与权限过滤</text>
+        </g>
+
+        <g class="node">
+          <rect x="44" y="88" width="184" height="88" rx="8"/>
+          <text class="name" x="60" y="117">Agent 应用与 SDK</text>
+          <text class="detail" x="60" y="143">轮次、LLM、并行子 Agent</text>
+          <text class="detail" x="60" y="162">携带已登记的追踪上下文</text>
+        </g>
+        <g class="node focus">
+          <rect x="316" y="88" width="200" height="88" rx="8"/>
+          <text class="name" x="332" y="117">遥测接入</text>
+          <text class="detail" x="332" y="143">验证身份和归属</text>
+          <text class="detail" x="332" y="162">校验脱敏、限流、持久接收</text>
+        </g>
+        <g class="node">
+          <rect x="316" y="224" width="200" height="88" rx="8"/>
+          <text class="name" x="332" y="253">工具网关与确认服务</text>
+          <text class="detail" x="332" y="279">决策、确认、执行结果</text>
+          <text class="detail" x="332" y="298">按平台调用 ID 关联</text>
+        </g>
+        <g class="node focus">
+          <rect x="600" y="224" width="200" height="88" rx="8"/>
+          <text class="name" x="616" y="253">审计记录与 Outbox</text>
+          <text class="detail" x="616" y="279">执行侧权威证据</text>
+          <text class="detail" x="616" y="298">按来源重放并补齐视图</text>
+        </g>
+        <g class="node">
+          <rect x="600" y="88" width="200" height="88" rx="8"/>
+          <text class="name" x="616" y="117">Trace 投影</text>
+          <text class="detail" x="616" y="143">去重、归并、组树</text>
+          <text class="detail" x="616" y="162">更新摘要与可见性</text>
+        </g>
+        <g class="node">
+          <rect x="884" y="88" width="188" height="88" rx="8"/>
+          <text class="name" x="900" y="117">PostgreSQL 读模型</text>
+          <text class="detail" x="900" y="143">Session / Trace / Span</text>
+          <text class="detail" x="900" y="162">内容单独加密与留存</text>
+        </g>
+        <g class="node">
+          <rect x="44" y="360" width="184" height="88" rx="8"/>
+          <text class="name" x="60" y="389">Agent 观测控制台</text>
+          <text class="detail" x="60" y="415">开发者与安全管理员</text>
+          <text class="detail" x="60" y="434">Session、时间线、调用树</text>
+        </g>
+        <g class="node">
+          <rect x="600" y="360" width="200" height="88" rx="8"/>
+          <text class="name" x="616" y="389">授权查询</text>
+          <text class="detail" x="616" y="415">租户、环境、项目、Agent</text>
+          <text class="detail" x="616" y="434">内容独立鉴权与访问审计</text>
+        </g>
+        <g class="legend">
+          <path class="path" d="M 44 500 H 76"/>
+          <text x="84" y="505">调用或数据流</text>
+          <path class="path async" d="M 200 500 H 232"/>
+          <text x="240" y="505">异步投影</text>
+        </g>
+      </svg>
+    </div>
+    <footer><a href="tracing-architecture.md">查看完整架构设计</a></footer>
+  </main>
+</body>
+</html>
