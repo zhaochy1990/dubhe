@@ -26,7 +26,7 @@ Agent 观测从会话列表进入，为开发者解释 Agent 如何运行，为�
 | --- | --- |
 | 只用网关记录 | 足够核查经过网关的工具调用。模型调用、并行子 Agent、应用最终输出缺少来源，无法覆盖原型的详情。 |
 | 第三方 Tracing 作为主后端 | 可以复用遥测接入和观测数据模型。网关审计归责、租户隔离以及待确认状态仍需由平台维护，两个数据面的查询和保留策略也需要协调。 |
-| **推荐 · OTLP 接入 + 平台 Trace 读模型** | Agent 侧复用 OpenTelemetry 的 OTLP exporter，平台保留业务关联、证据归责和授权。首期直接写 PostgreSQL，网关审计经独立后台消费者汇入。 |
+| **推荐 · OTLP 接入 + 平台 Trace 读模型** | Agent 侧复用 OpenTelemetry 的 OTLP exporter，平台保留业务关联、证据归责和授权。首期直接写 MySQL，网关审计经独立后台消费者汇入。 |
 
 Session／Trace／Span 的组织方式与 Langfuse 的 Session／Trace／Observation 对应。业务字段统一归一化，OTel 属性映射按版本测试，方便兼容 SDK 或后续对接外部观测后端。 [Langfuse 数据模型](https://langfuse.com/docs/observability/data-model) · [OpenTelemetry Span 规范](https://opentelemetry.io/docs/specs/otel/trace/api/)
 
@@ -41,7 +41,7 @@ flowchart LR
     Gateway["网关、执行器与确认服务"] -->|同事务写入| Audit["网关审计与 Outbox"]
   end
   subgraph Tracing["Tracing"]
-    Ingest["OTLP 接入"] -->|批量写 Span，提交后确认| Store["Tracing PostgreSQL"]
+    Ingest["OTLP 接入"] -->|批量写 Span，提交后确认| Store["Tracing MySQL"]
     Consumer["审计事件消费者"] -->|幂等更新| Store
     Query["授权查询"] --> Store
   end
@@ -52,19 +52,19 @@ flowchart LR
 | 模块 | 责任与接口 |
 | --- | --- |
 | 业务关联 | 可信应用入口用 OTel SDK 建本轮根 Span，确定不变的 Trace 登记时间并签发短时效业务关联凭据。平台内部使用同一时间异步登记 Session、轮次和 Trace，SDK 开始导出前完成登记。凭据绑定租户、环境、项目、Session ID、根 Agent、轮次、Trace ID、Trace 登记时间及授权调用主体，网关依据可信签发方配置独立验签。业务入口在 Tracing 不可用时仍能签发关联凭据并分派工具请求。 |
-| OTLP 接入 | SDK／编排器批报结束的 Span。接入验工作负载身份、Trace 归属和请求格式与大小，直接向 Tracing PostgreSQL 写入可查询的结构化 Span。 |
+| OTLP 接入 | SDK／编排器批报结束的 Span。接入验工作负载身份、Trace 归属和请求格式与大小，直接向 Tracing MySQL 写入可查询的结构化 Span。 |
 | Tooling Gateway、执行器与确认服务 | 按各自职责产生服务端证据。鉴权后记录会话、发起用户或工作负载、Agent、委托关系及实际下游执行主体。策略决策与生效版本由网关写入，确认和执行结果由各自的事实源写入。 |
 | 审计记录与 Outbox | 执行侧的权威事实。用同一事务记录业务状态转移、对应审计事件和待投影记录。原事件追加保存，修正通过新事件表达。 |
-| 审计事件消费者 | 从网关侧内部 Outbox 接口拉取有版本的审计事件，处理重放、乱序和调用关联，把工具节点与消费去重记录写入 Tracing PostgreSQL。 |
-| 查询 | 按访问范围读取会话、Trace、调用节点以及关联证据引用。从 Tracing PostgreSQL 组装调用树和时间线。控制台使用同一套查询视图。 |
+| 审计事件消费者 | 从网关侧内部 Outbox 接口拉取有版本的审计事件，处理重放、乱序和调用关联，把工具节点与消费去重记录写入 Tracing MySQL。 |
+| 查询 | 按访问范围读取会话、Trace、调用节点以及关联证据引用。从 Tracing MySQL 组装调用树和时间线。控制台使用同一套查询视图。 |
 
 **OTLP 持久化路径。**
 
 1. SDK 在结束 Span 后异步批报。一个批次可以包含多条 Trace，接入端按生产者逐条核验可信登记及执行 Agent。SDK 等到可信登记成功再导出。查询登记失败时返回 OTLP/HTTP 503。权威记录不存在、超出接收窗口或生产者未获授权时永久拒绝该 Span。遥测接收窗口与业务关联凭据的有效期独立。试点可在可信终止或最长运行期结束后再收 48 小时，以两者中的较早截止时间为准。
-2. 把通过校验的 Span 映射成结构化字段。一个数据库事务批量写入 `spans`，同步维护本批触及的 `sessions`、`traces` 时间和根状态索引字段。按租户、环境、项目、Trace ID、Span ID 幂等写入。重复上报不增加节点。结构化字段或来源冲突的 Span 不覆盖已写事实。
-3. PostgreSQL 同步提交后，返回 OTLP 响应。混合有效和永久拒绝的 Span 时，提交有效部分并报告拒绝数。数据库暂时不可用、事务因暂时性故障未提交或提交结果未知时返回 OTLP/HTTP 503，SDK 重发时按同一键去重。V1 只持久化可查询的结构化记录，接收请求体不另做归档，也无需 OTLP 暂存表或消息队列。SDK 缓冲耗尽或退出时仍可能丢失未成功发送的遥测。
+2. 把通过校验的 Span 映射成结构化字段。一个数据库事务批量写入 `spans`，同步维护本批触及的 `sessions`、`traces` 时间和根状态索引字段。租户、环境、项目、Trace ID 和 Span ID 组成 InnoDB 唯一键。批量插入使用 `ON DUPLICATE KEY UPDATE` 保留已存在行，随后在同一事务用锁定读核对持久化记录。等价重传计为成功，来源或字段冲突时保留原记录并拒绝该 Span。只按已接受的记录更新会话和 Trace。其他写入错误按事务失败处理。
+3. MySQL InnoDB 事务持久提交后，返回 OTLP 响应。接收库使用 `innodb_flush_log_at_trx_commit=1`，启用 binlog 时使用 `sync_binlog=1`。混合有效和永久拒绝的 Span 时，提交有效部分并报告拒绝数。数据库暂时不可用、事务因暂时性故障未提交或提交结果未知时返回 OTLP/HTTP 503，SDK 重发时按同一键去重。V1 只持久化可查询的结构化记录，接收请求体不另做归档，也无需 OTLP 暂存表或消息队列。SDK 缓冲耗尽或退出时仍可能丢失未成功发送的遥测。
 
-[OTLP/HTTP 投递与确认](https://opentelemetry.io/docs/specs/otlp/#otlphttp) · [PostgreSQL 冲突处理](https://www.postgresql.org/docs/current/sql-insert.html) · [PostgreSQL 提交持久性](https://www.postgresql.org/docs/current/wal-async-commit.html)
+[OTLP/HTTP 投递与确认](https://opentelemetry.io/docs/specs/otlp/#otlphttp) · [MySQL 唯一键冲突](https://dev.mysql.com/doc/refman/8.4/en/insert-on-duplicate.html) · [InnoDB 提交持久性](https://dev.mysql.com/doc/refman/8.4/en/innodb-parameters.html#sysvar_innodb_flush_log_at_trx_commit)
 
 **网关执行路径。** 网关生成平台调用 ID，持久化决策，允许执行时还要在实际转发前持久化执行意图。确认挂起时，确认记录保存调用 ID 和原 Trace 上下文；之后以锁定的参数、当前授权和有效期复验，领取成功后生成执行尝试。只读调用也记录放行和结果。Tracing 停机时，网关仍执行自己的鉴权、策略与审计，Outbox 可积压并重放。网关自己的必需审计写入不可用时，网关对尚未发出的调用返回暂不可用，禁止转发并触发监控；已发出的调用可能只能标为结果未知并待对账。工具执行和数据库事务跨系统，按调用 ID 保存和查询执行尝试。副作用调用要求提供逻辑请求幂等键，平台在首次接收并完成身份校验后原子写入幂等占位、平台调用 ID 和首条审计事件，先于创建确认单或转发，按租户、环境、项目、已认证调用主体和该键去重，绑定原操作版本及规范化参数摘要。并发或超时后的同键重传返回同一个调用 ID 和状态；同键换参数或操作返回冲突。重传读取状态仍需鉴权。幂等记录从调用开始覆盖客户端重试窗口、确认有效期及结果未知的对账窗口，生命周期由执行侧管理。只有下游明确支持幂等及结果查询时才可用原调用 ID 按其契约恢复，其他情况保留未知并人工核验。
 
@@ -102,18 +102,18 @@ flowchart LR
 
 | 查询接口 | 返回与约束 |
 | --- | --- |
-| `GET /v1/observability/sessions` | 按 `from,to,agent_id,result,q,tz,cursor` 查询，时间窗默认 7 天、上限 30 天。Agent 和结果支持多选，同类选项取并集、不同条件取交集。搜索匹配 Session ID 或 Agent 名称；筛选选项限定在访问范围，Agent 选项来自所查时间窗内可见会话。时间条件按 Session 开始时刻，区间为 `[from,to)`。时间桶按请求时区边界生成。列表、总数、分布在同一数据库快照内按同一授权和筛选条件计算。分页按 `started_at DESC, session_id DESC`，游标签名绑定过滤条件与授权范围；翻页之间状态可随投影更新。 |
+| `GET /v1/observability/sessions` | 按 `from,to,agent_id,result,q,tz,cursor` 查询，时间窗默认 7 天、上限 30 天。Agent 和结果支持多选，同类选项取并集、不同条件取交集。搜索匹配 Session ID 或 Agent 名称；筛选选项限定在访问范围，Agent 选项来自所查时间窗内可见会话。时间条件按 Session 开始时刻，区间为 `[from,to)`。时间桶按请求时区边界生成。列表、总数、分布在同一个 InnoDB `REPEATABLE READ` 只读事务内按同一授权和筛选条件计算。分页按 `started_at DESC, session_id DESC`，游标签名绑定过滤条件与授权范围；翻页之间状态可随投影更新。 [InnoDB 一致性读](https://dev.mysql.com/doc/refman/8.4/en/innodb-consistent-read.html) |
 | `GET /v1/observability/sessions/{id}/traces` | 按轮次或运行开始时间返回 Trace 摘要，支持游标分页。 |
 | `GET /v1/observability/traces/{id}` | 返回时间范围、覆盖、治理摘要、紧凑节点集、节点 ID 及父子关系。超过单响应预算时使用明确的分段游标并标识未加载节点，父节点占位用结构标记表达。 |
 | `GET /v1/observability/traces/{id}/nodes/{node_id}` | SDK Span 和网关工具节点使用同一详情接口，`node_id` 由 Trace 详情返回。响应按类型提供元数据、决策和证据引用。生产 Trace 的模型和工具原文字段标记为未采集。 |
 | `GET /v1/observability/tool-calls/{call_id}/trace` | 按本地索引返回可访问的工具节点深链。投影未就绪、已过期或不可见时统一返回不可用，网关审计页继续显示自己持有的证据。 |
 
-**读权限。** 使用服务端身份与项目/Agent 授权求交，再检查环境、节点与证据权限。开发者需有根 Agent 权限才能进入会话，并对不同执行 Agent 的节点逐一鉴权。无法核验归属的节点只向有该项目或租户观测权限的安全管理员开放。先过滤节点和证据，再计算摘要、计数和筛选项，隐藏父节点的标识和占位信息，仍可见的子节点挂到无归属信息的视图根层。节点被授权过滤也不对读者暴露缺失原因或数量。安全管理员按获授权项目或租户看治理事实。越权深链返回与不存在相同的响应，筛选选项、分布与计数也必须应用授权。查询账户无库表所有权或 `BYPASSRLS`，数据库行级策略隔离租户和项目，应用层继续执行 Agent 权限。对以连接池复用的连接，访问上下文用事务局部变量绑定。 [PostgreSQL 行级安全](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
+**读权限。** 使用服务端身份与项目/Agent 授权求交，再检查环境、节点与证据权限。开发者需有根 Agent 权限才能进入会话，并对不同执行 Agent 的节点逐一鉴权。无法核验归属的节点只向有该项目或租户观测权限的安全管理员开放。先过滤节点和证据，再计算摘要、计数和筛选项，隐藏父节点的标识和占位信息，仍可见的子节点挂到无归属信息的视图根层。节点被授权过滤也不对读者暴露缺失原因或数量。安全管理员按获授权项目或租户看治理事实。越权深链返回与不存在相同的响应，筛选选项、分布与计数也必须应用授权。租户、环境、项目和 Agent 的行级隔离由 Tracing 服务的数据访问层执行。每次查询从服务端授权上下文取得允许的范围组合，作为参数传入 SQL；通过 ID 查找、关联匹配、筛选和聚合均带上同一范围。MySQL 账号按职责授予库表权限，查询账号只有读取权限。 [MySQL GRANT](https://dev.mysql.com/doc/refman/8.4/en/grant.html)
 
 
 **V1 数据范围。** 接入只存类型受限的结构字段，例如 Span ID、时间、状态枚举、Token 数及配置或可信目录中的模型与工具标识。SDK 配置仅导出约定的结构字段。未知标识和自由文本值不落库，错误仅存原因码，证据仅存可信引用 ID。接入、数据库和 Tracing 日志不保留原始 OTLP 请求体、任意属性、Prompt、模型回复或工具参数与返回值。V1 不建设实时脱敏、内容采集和按租户或 Agent 的业务限流。保留鉴权、归属验证、协议格式校验及 OTLP 请求体大小上限，大小上限涵盖解压后的请求。
 
-**存储与留存。** V1 的 Tracing 直接用 PostgreSQL，用同一套关系表和索引完成事务写入、Session 筛选与 Trace 回查。V1 无需独立观测存储或消息队列。执行领域和 Tracing 各自管理数据库与访问账号。财务 Demo 可共用 PostgreSQL 实例但使用独立数据库和连接池，共用实例停机时两边均受影响。要求 Tracing 库故障不影响网关执行的环境，两边使用独立实例。Session 按租户、环境、项目、开始时间和 ID 索引，Trace/Span 按归属、Trace 与父节点索引，工具深链按平台 `call_id` 索引。试点建议元数据从可信入口原始登记时间起留存 30 天，纯网关 Trace 从网关侧首次登记时间起算。事件首次延迟到达也沿用该时间。活跃确认及对账按前述规则延长最小记录留存。网关自己的审计按其政策保留。旧 Trace 到期后从 Session 摘要移除，最后一条到期后移除 Session 视图。迟到事件和重放遵守原有到期时间及删除标记。删除记录的保留期覆盖可恢复备份及事件重放窗口，恢复时从独立保留的删除增量补齐标记，再开放查询和重放。 [V1 存储与接入边界](../adr/0002-v1-tracing-postgresql-and-gateway-audit.md)
+**存储与留存。** V1 的 Tracing 使用 MySQL InnoDB，用同一套关系表和索引完成事务写入、Session 筛选与 Trace 回查。V1 无需独立观测存储或消息队列。执行领域和 Tracing 各自管理数据库与访问账号。若执行侧也采用 MySQL，财务 Demo 可共用实例，分别使用独立数据库、账号和连接池，共用实例停机时两边均受影响。要求 Tracing 库故障不影响网关执行的环境，两边使用独立实例。Session 按租户、环境、项目、开始时间和 ID 索引，Trace/Span 按归属、Trace 与父节点索引，工具深链按平台 `call_id` 索引。试点建议元数据从可信入口原始登记时间起留存 30 天，纯网关 Trace 从网关侧首次登记时间起算。事件首次延迟到达也沿用该时间。活跃确认及对账按前述规则延长最小记录留存。网关自己的审计按其政策保留。旧 Trace 到期后从 Session 摘要移除，最后一条到期后移除 Session 视图。迟到事件和重放遵守原有到期时间及删除标记。删除记录的保留期覆盖可恢复备份及事件重放窗口，恢复时从独立保留的删除增量补齐标记，再开放查询和重放。 [V1 存储与接入边界](../adr/0002-v1-tracing-mysql-and-gateway-audit.md)
 
 ## 6. 可靠性与验收
 
@@ -127,8 +127,8 @@ flowchart LR
 | 真链路 | 财务 Demo 展示合成 LLM 节点、查账和付款；阻断及待确认时下游零请求，确认后由独立测试后端记录核对实际执行，Trace 跳回同一次调用。 |
 | OTLP 接入 | 工作负载已鉴权且 Trace 已可信登记时，标准 OpenTelemetry OTLP/HTTP exporter 可向 `POST /v1/traces` 批量发送 Trace，接收符合 OTLP/HTTP 规范的响应，节点可在控制台查询。OTLP/gRPC、指标、日志等其他遥测信号及厂商专用上报请求无法通过 V1 Tracing 接入。 |
 | 拓扑与关联 | 多轮同 Session、并行 Agent、乱序父节点、重复上报、缺失 SDK 及错误关联均可稳定展示。确认拒绝、过期或复验失败后，列表更新治理摘要。执行完成后，详情展现实际执行结果，历史决策仍可查。父上下文的 Trace ID 与可信登记不匹配时，网关证据仍归入已验证的 Trace，且不挂到外来的父节点。SDK Span 和审计事件无论谁先到，匹配后均归并到同一网关工具节点并挂到同一父节点。相同事件重放后计数与审计引用一致。 |
-| 可靠写入 | 在隔离部署中，停 Tracing 服务或其数据库，网关工具调用与本地审计继续。恢复后重放 Outbox，工具节点只出现一次。模拟 OTLP 提交失败及提交后断连，确认成功响应只发生在提交后，重传不重复写 Span。停执行侧审计写入时禁止新转发，执行结果未知时保持原调用 ID 待核验。 |
-| 访问与数据范围 | 列表、计数、聚合和深链均应用租户、项目及 Agent 权限。SDK 误报原文、任意属性或把自由文本塞入标识字段时，Tracing 只保存约定的结构值，且不记录请求体。 |
+| 可靠写入 | 在隔离部署中，停 Tracing 服务或其数据库，网关工具调用与本地审计继续。恢复后重放 Outbox，工具节点只出现一次。模拟 OTLP 提交失败及提交后断连，确认成功响应只发生在提交后，重传不重复写 Span；并发同键重传不覆盖原记录，其他写入错误触发事务失败。停执行侧审计写入时禁止新转发，执行结果未知时保持原调用 ID 待核验。 |
+| 访问与数据范围 | 列表、计数、聚合和深链均应用租户、环境、项目及 Agent 权限。不同租户或项目存在相同外部 ID 时，直接查 ID 和跨表关联也只读取授权范围的数据。SDK 误报原文、任意属性或把自由文本塞入标识字段时，Tracing 只保存约定的结构值，且不记录请求体。 |
 | 生命周期 | 超过 SDK 上报窗口的确认与执行仍可回到原调用。迟到事件按来源顺序归并，拒绝和成功记录同时保留；重放或备份恢复不复活删除记录。 |
 
 上线依次验证 OTLP 直写、独立网关审计消费、父子拓扑和多轮会话。真实负载、客户留存要求和允许接入的生产 Agent 范围需在上线前确认。
