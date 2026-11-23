@@ -110,8 +110,21 @@ export interface RunSpan {
   setOutcome(outcome: RunOutcome): void
 }
 
+export interface ModelInputMessage {
+  role: 'system' | 'developer' | 'user' | 'assistant' | 'tool'
+  content: string
+}
+
+export interface ModelRequestMetadata {
+  modelName?: string
+  temperature?: number
+  systemInstructions?: readonly string[]
+  messages?: readonly ModelInputMessage[]
+}
+
 export interface ModelObservation {
   context: TraceContext
+  recordRequest(request: ModelRequestMetadata): void
   recordUsage(usage: { inputTokens?: number; outputTokens?: number }): void
 }
 
@@ -130,6 +143,7 @@ export interface TracingOptions {
   otlpTraceEndpoint: string
   getOtlpHeaders(): Promise<Readonly<Record<string, string>>>
   gatewayOrigins: readonly string[]
+  captureModelInputs?: boolean
   host: TrustedTracingHost
   registration: RunRegistration
   maxBufferedSpans?: number
@@ -182,7 +196,7 @@ SDK 使用标准上下文传播和 OTLP exporter。V1 配置完整的 Trace URL 
 
 **拟定的 HTTP 适配。** 由网关在已分配调用 ID 后的业务响应中设置 `x-dubhe-call-id`。SDK 通过工具客户端适配器读取，适用于正常响应、策略拒绝或待确认等已形成调用记录的响应。代理转发时保留该头。没有可信响应头时调用 ID 为空。其他消费方式可复用相同的业务语义，通过适配器把可信响应元数据转成 `recordResponse()`。
 
-网关保存的 `traceparent.parent-id` 对应 SDK 工具客户端 Span 的 `span_id`。合并时同时核对归属、可信 Trace、执行 Agent、`call_id` 和该 Span ID。合并后的网关主节点再按 SDK Span 的 `parent_span_id` 挂树。如果首次响应丢失，后续客户端重试即使收到原 `call_id`，只要 Span ID 不匹配，也保留为单独的客户端尝试。SDK 的 HTTP 状态、超时及异常都属于客户端观测。
+网关从已验证的 `traceparent.parent-id` 获取 `ToolCall.span_id`。SDK 把响应中的调用 ID 记在工具 Span 的 `metadata.client_call_id`。合并时核对归属、可信 Trace、执行 Agent、`call_id` 和 SDK Span ID。匹配后的网关主节点按 SDK Span 的 `parent_span_id` 挂树。同一幂等键的请求重试沿用原 `call_id`，重新创建客户端工具 Span 时则生成新的 `span_id`。如果重试拿回原 `call_id` 而 Span ID 不匹配，仍显示为单独的客户端尝试。只有网关再次发起下游执行时才新增 `ExecutionAttempt`。
 
 ```ts
 declare const tracing: TracingSdk
@@ -211,11 +225,13 @@ export async function runTurn() {
 }
 ```
 
-真实业务客户端按既有接口附加其认证和业务数据，并在 HTTP 错误映射成应用异常前先提取响应元数据。若已经记录响应，SDK 保留该客户端响应状态，同时可标记回调结束后的应用异常。本地和直连工具的记录仅采用客户端状态。模型适配器把已知 Token 计数传给 `recordUsage`。并行子 Agent 以同一个 `TraceContext` 分别调用 `withAgent`。
+真实业务客户端按既有接口附加其认证和业务数据，并在 HTTP 错误映射成应用异常前先提取响应元数据。若已经记录响应，SDK 保留该客户端响应状态，同时可标记回调结束后的应用异常。本地和直连工具的记录采用客户端状态。网关工具的 `ToolCall.parameters` 由执行侧审计提供。并行子 Agent 以同一个 `TraceContext` 分别调用 `withAgent`。
+
+模型适配器在发出请求前用 `recordRequest` 记录最终模型名、采样参数和实际输入。单独传给模型的 System Prompt 放入 `systemInstructions`，消息中的 System Prompt、User Prompt 和历史消息按发送顺序记录到 `messages`。适配器用 `recordUsage` 写入已知 Token 数。输入采集须同时满足 SDK 的 `captureModelInputs` 开关与服务端项目、环境策略。任一侧未开启时，只保留模型名、采样参数和用量等非原文数据。
 
 ## 4. V1 Span 属性与逻辑映射
 
-Dubhe 以 `dubhe.*` 属性传输业务语义。跨进程身份仍通过认证与可信登记校验。SDK 的值来自有限枚举或可信目录。任意文本、自定义属性、Prompt、输入输出原文、凭据和异常栈不进入 V1 Span。模型参数不可得时保持缺失。
+Dubhe 用 `dubhe.*` 属性传输自己的业务语义。跨进程身份通过认证与可信登记校验。结构化字段来自允许的枚举或目录。已开启采集的模型输入只通过指定内容属性上报。模型回复原文、工具返回原文、认证头、异常栈及任意自定义属性无需采集。模型参数不可得时保持缺失。
 
 | Span 属性 | 用途与类型 | Span 逻辑属性 |
 | --- | --- | --- |
@@ -223,18 +239,19 @@ Dubhe 以 `dubhe.*` 属性传输业务语义。跨进程身份仍通过认证与
 | OTLP `startTimeUnixNano/endTimeUnixNano/status.code` | 起止时间和 OTel 状态 | `start_ns/end_ns/status` |
 | `dubhe.span.kind` | `run`、`agent`、`llm`、`tool_client` | `kind` |
 | `dubhe.agent.id` | 本 Span 声明的执行 Agent，入站须匹配生产者授权 | `agent_id` |
-| `dubhe.run.outcome` | 根 Span 的显式终态 | `run_outcome` |
-| `dubhe.model.id` | 可信目录模型 ID | `model_id` |
-| `gen_ai.usage.input_tokens`、`gen_ai.usage.output_tokens` | 已知输入及输出计数 | `input_tokens/output_tokens` |
-| `gen_ai.request.max_tokens`、`gen_ai.request.temperature` | 已知输出上限和采样参数 | `max_output_tokens/temperature` |
-| `dubhe.tool.id` | 可信目录工具 ID | `tool_id` |
-| `dubhe.tool.route` | `gateway`、`local`、`direct` | `tool_route` |
-| `dubhe.tool.call_id` | 网关已回传的调用 ID | `client_call_id` |
-| `dubhe.tool.client_result` | `response`、`timeout`、`error`、`cancelled` | `client_result` |
-| `http.response.status_code` | 已接收 HTTP 状态码 | `response_code` |
-| `dubhe.error.code` | SDK 错误适配器提供的固定分类 | `error_code` |
+| `dubhe.run.outcome` | 根 Span 的显式终态 | `metadata.run_outcome` |
+| `dubhe.model.id`、`gen_ai.request.model` | 可信目录模型 ID、最终请求的模型名 | `metadata.model_id`、`metadata.model_name` |
+| `gen_ai.usage.input_tokens`、`gen_ai.usage.output_tokens` | 已知输入及输出计数 | `metadata.input_tokens`、`metadata.output_tokens` |
+| `gen_ai.request.max_tokens`、`gen_ai.request.temperature` | 已知输出上限和采样参数 | `metadata.max_output_tokens`、`metadata.temperature` |
+| `gen_ai.system_instructions`、`gen_ai.input.messages` | 独立的 System Prompt 和按顺序发送的输入消息 | `metadata.system_instructions`、`metadata.messages` |
+| `dubhe.tool.id` | 可信目录工具 ID | `metadata.tool_id` |
+| `dubhe.tool.route` | `gateway`、`local`、`direct` | `metadata.tool_route` |
+| `dubhe.tool.call_id` | 网关已回传的调用 ID，仅用于 SDK 工具 Span | `metadata.client_call_id` |
+| `dubhe.tool.client_result` | `response`、`timeout`、`error`、`cancelled` | `metadata.client_result` |
+| `http.response.status_code` | 已接收 HTTP 状态码 | `metadata.response_code` |
+| `dubhe.error.code` | SDK 错误适配器提供的固定分类 | `metadata.error_code` |
 
-`producer_id` 和唯一作用域从认证求得，Session 从该范围的可信 Trace 登记求得。每个批次可混合此范围内的不同 Trace。传输层校验这些复合约束。V1 在受控导出路径配置固定字段集合，默认不发送自动插桩附加的原始 HTTP、数据库或模型属性。 [OpenTelemetry GenAI 属性](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/)
+`producer_id` 和唯一作用域从认证求得，Session 从该范围的可信 Trace 登记求得。每个批次可混合此范围内的不同 Trace。`metadata` 是 Tracing 归一化后的逻辑 JSON。OTLP 仍分属性传输，模型输入适配为 GenAI 约定的内容结构。语言 SDK 缺少结构化属性能力时可按约定使用 JSON 字符串，接入端解析并校验后写入相同结构。 [OpenTelemetry GenAI 属性](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/)
 
 ## 5. 投递与验收
 
