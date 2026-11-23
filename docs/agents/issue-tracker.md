@@ -20,8 +20,10 @@ Use `gh` with `--repo zhaochy1990/dubhe` for tracker operations.
 
 **PRs as a request surface: no.**
 
-## Wayfinding
+## Wayfinding operations
 
+- Before creating a map or ticket, check for its label with
+  `gh label list` and create it with `gh label create <name>` if missing.
 - Track a map in an issue labelled `wayfinder:map`.
 - Link tickets as sub-issues and label each `wayfinder:<type>`.
 - Choose the first open, unassigned child whose blockers are closed.
