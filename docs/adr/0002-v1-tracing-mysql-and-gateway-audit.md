@@ -4,6 +4,6 @@ Tracing 直接用 MySQL InnoDB 保存结构化 Span、会话及工具节点。OT
 
 Tooling Gateway 持有决策、确认和执行的审计事实，在执行侧事务内写入 Outbox。Tracing 后台消费者异步生成受管工具节点，SDK 通过 OTLP 补充客户端耗时和调用拓扑。两边独立部署和管理数据，网关执行无需依赖 Tracing 的服务或数据库。
 
-V1 网关每个 `call_id` 最多转发下游一次，执行客户端关闭自动重试。转发前在同一执行侧事务提交 `ToolCall.execution_state` 的条件更新和转发意图审计事件。同键重传从共享记录返回原调用 ID 和持久化状态。结果未知时，按调用 ID 核对下游回执或对账证据。
+V1 网关每个 `call_id` 最多转发下游一次。执行客户端和受控代理关闭自动重试及会再次发送请求的自动重定向。转发前提交 `ToolCall.execution_state` 的条件更新、执行截止时间及转发意图审计事件。同键重传从共享记录返回原调用 ID 和持久化状态。超时且仍在执行中的调用转为未知，执行侧按调用 ID 或首次转发前绑定的下游请求引用核对证据。提交转发意图后，恢复和对账只更新结果。
 
 [Tracing 架构](../architecture/tracing-architecture.md) · [V1 OTLP 接入](0001-v1-otlp-trace-ingest.md)
