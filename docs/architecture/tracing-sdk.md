@@ -4,7 +4,7 @@ V1 设计草案 · 2026-11-23
 
 本设计供可信应用入口和 Agent 运行时接入。SDK 给运行过程创建 OpenTelemetry Span，通过 OTLP/HTTP 把结构化元数据送到 `POST /v1/traces`。受管工具的策略决策、确认和执行回执由 Tooling Gateway 审计提供。SDK 自带的工具 Span 负责客户端视角。
 
-[整体架构](tracing-architecture.md) · [数据结构与 ER 图](tracing-architecture.html#data-model) · [V1 OTLP 接入决策](../adr/0001-v1-otlp-trace-ingest.md)
+[整体架构](tracing-architecture.md) · [实体关系图](tracing-architecture.html#data-model) · [V1 OTLP 接入决策](../adr/0001-v1-otlp-trace-ingest.md)
 
 ## 1. 调用方与初始化
 
@@ -213,26 +213,26 @@ export async function runTurn() {
 
 真实业务客户端按既有接口附加其认证和业务数据，并在 HTTP 错误映射成应用异常前先提取响应元数据。若已经记录响应，SDK 保留该客户端响应状态，同时可标记回调结束后的应用异常。本地和直连工具的记录仅采用客户端状态。模型适配器把已知 Token 计数传给 `recordUsage`。并行子 Agent 以同一个 `TraceContext` 分别调用 `withAgent`。
 
-## 4. V1 Span 属性与存储映射
+## 4. V1 Span 属性与逻辑映射
 
 Dubhe 以 `dubhe.*` 属性传输业务语义。跨进程身份仍通过认证与可信登记校验。SDK 的值来自有限枚举或可信目录。任意文本、自定义属性、Prompt、输入输出原文、凭据和异常栈不进入 V1 Span。模型参数不可得时保持缺失。
 
-| Span 属性 | 用途与类型 | 存储字段 |
+| Span 属性 | 用途与类型 | Span 逻辑属性 |
 | --- | --- | --- |
-| OTLP `traceId/spanId/parentSpanId` | OTel 生成的运行、节点和父节点 ID | `spans.trace_id/span_id/parent_span_id` |
-| OTLP `startTimeUnixNano/endTimeUnixNano/status.code` | 起止时间和 OTel 状态 | `spans.start_ns/end_ns/status` |
-| `dubhe.span.kind` | `run`、`agent`、`llm`、`tool_client` | `spans.kind` |
-| `dubhe.agent.id` | 本 Span 声明的执行 Agent，入站须匹配生产者授权 | `spans.agent_id` |
-| `dubhe.run.outcome` | 根 Span 的显式终态 | `spans.run_outcome` |
-| `dubhe.model.id` | 可信目录模型 ID | `spans.model_id` |
-| `gen_ai.usage.input_tokens`、`gen_ai.usage.output_tokens` | 已知输入及输出计数 | `spans.input_tokens/output_tokens` |
-| `gen_ai.request.max_tokens`、`gen_ai.request.temperature` | 已知输出上限和采样参数 | `spans.max_output_tokens/temperature` |
-| `dubhe.tool.id` | 可信目录工具 ID | `spans.tool_id` |
-| `dubhe.tool.route` | `gateway`、`local`、`direct` | `spans.tool_route` |
-| `dubhe.tool.call_id` | 网关已回传的调用 ID | `spans.client_call_id` |
-| `dubhe.tool.client_result` | `response`、`timeout`、`error`、`cancelled` | `spans.client_result` |
-| `http.response.status_code` | 已接收 HTTP 状态码 | `spans.response_code` |
-| `dubhe.error.code` | SDK 错误适配器提供的固定分类 | `spans.error_code` |
+| OTLP `traceId/spanId/parentSpanId` | OTel 生成的运行、节点和父节点 ID | `trace_id/span_id/parent_span_id` |
+| OTLP `startTimeUnixNano/endTimeUnixNano/status.code` | 起止时间和 OTel 状态 | `start_ns/end_ns/status` |
+| `dubhe.span.kind` | `run`、`agent`、`llm`、`tool_client` | `kind` |
+| `dubhe.agent.id` | 本 Span 声明的执行 Agent，入站须匹配生产者授权 | `agent_id` |
+| `dubhe.run.outcome` | 根 Span 的显式终态 | `run_outcome` |
+| `dubhe.model.id` | 可信目录模型 ID | `model_id` |
+| `gen_ai.usage.input_tokens`、`gen_ai.usage.output_tokens` | 已知输入及输出计数 | `input_tokens/output_tokens` |
+| `gen_ai.request.max_tokens`、`gen_ai.request.temperature` | 已知输出上限和采样参数 | `max_output_tokens/temperature` |
+| `dubhe.tool.id` | 可信目录工具 ID | `tool_id` |
+| `dubhe.tool.route` | `gateway`、`local`、`direct` | `tool_route` |
+| `dubhe.tool.call_id` | 网关已回传的调用 ID | `client_call_id` |
+| `dubhe.tool.client_result` | `response`、`timeout`、`error`、`cancelled` | `client_result` |
+| `http.response.status_code` | 已接收 HTTP 状态码 | `response_code` |
+| `dubhe.error.code` | SDK 错误适配器提供的固定分类 | `error_code` |
 
 `producer_id` 和唯一作用域从认证求得，Session 从该范围的可信 Trace 登记求得。每个批次可混合此范围内的不同 Trace。传输层校验这些复合约束。V1 在受控导出路径配置固定字段集合，默认不发送自动插桩附加的原始 HTTP、数据库或模型属性。 [OpenTelemetry GenAI 属性](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/)
 

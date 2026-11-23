@@ -2,7 +2,7 @@
 
 方案草案 · 2026-11-23
 
-[系统架构图（在本地浏览器打开 HTML）](tracing-architecture.html) · [V1 数据结构与 ER 图](tracing-architecture.html#data-model) · [SDK API 设计](tracing-sdk.md)
+[系统架构图（在本地浏览器打开 HTML）](tracing-architecture.html) · [V1 实体关系图](tracing-architecture.html#data-model) · [SDK API 设计](tracing-sdk.md)
 
 ## 1. 目标与一期范围
 
@@ -75,7 +75,7 @@ flowchart LR
 
 ## 4. 数据模型与运行语义
 
-ER 图、字段字典、索引与参考建表语句见系统架构页。归属和持久关系使用组合外键。允许晚到的 Span 父节点由应用层校验和解析。 [V1 数据结构](tracing-architecture.html#data-model) · [InnoDB 外键](https://dev.mysql.com/doc/refman/8.4/en/create-table-foreign-keys.html)
+系统架构页展示 V1 的领域实体、主要属性和关系基数。父 Span 可晚于子 Span 到达，由应用层在同一 Trace 中解析。 [V1 实体关系图](tracing-architecture.html#data-model)
 
 所有观测记录以服务端确定的 `tenant_id`、`environment_id` 和 `project_id` 为隔离范围。会话归属单一项目，项目内根 Agent 和会话在首条可信登记时确定。不同项目之间的运行分别建立 Trace，一期只在各自项目内展示节点。MCP 协议会话 ID 与业务会话 ID 分开。
 
