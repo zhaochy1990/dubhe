@@ -166,7 +166,7 @@ export declare function createTracingSdk(options: TracingOptions): TracingSdk
 3. 不变的 `sessionStartedAt` 和 `registeredAt` 同时用于签发的业务关联和异步登记。SDK 调用 `registration.register`，重复登记使用相同绑定。登记包含根 Span ID、根生产者、根 Agent 和各项生产者授权。Tracing 登记暂时失败时，宿主已授权的分派和网关校验照常进行。SDK 异步重试登记，未确认的 Span 在本地有界缓冲中等待。
 4. `handoff` 从当前 Span 注入 W3C Context，宿主按目标 Agent 和生产者签发受限的分派凭据，经可信内部通道交给目标工作负载。`continueRun` 先验证分派目标、过期时间和作用域，再检查 carrier 的 Trace ID 与凭据一致。无效分派在执行回调前返回校验错误。子工作负载以已验证的目标 Agent 为当前 Agent。续签由宿主按原 Trace 和授权范围处理，OTLP 凭据与业务关联凭据在各自通道使用。
 5. 可信 Trace 登记成功后才允许 SDK 导出。远端工作负载通过 `waitUntilRegistered` 异步等待同一已验证 Trace。没有登记权限、登记永久失败或超过接收截止时丢弃待发送遥测并计数。根 Span 结束后，只要还在接收窗口内，已登记的子 Span 仍可抵达。采集故障不会重新运行回调。
-6. `withAgent`、`withModel` 和 `withTool` 各自以传入上下文创建一个子 Span。并行任务共享同一父上下文。`withAgent` 切换当前 Agent，后续模型和工具 Span 继承它，接入仍核验生产者是否获准上报该 Agent。回调成功、抛出或取消时在 `finally` 中结束 Span，原有返回值与异常持续传给调用方。根运行默认以正常返回或异常推导终态，根回调可用 `setOutcome` 标记业务已失败但正常返回的情况。取消依据宿主确认，SDK 根终态仅由可信登记中的根生产者和根 Agent 上报。
+6. `withAgent`、`withModel` 和 `withTool` 各自以传入上下文创建一个子 Span。并行任务共享同一父上下文。`withAgent` 切换当前 Agent，后续模型和工具 Span 继承它，接入仍核验生产者是否获准上报该 Agent。回调成功、抛出或取消时在 `finally` 中结束 Span，原有返回值与异常持续传给调用方。根运行默认以正常返回或异常推导终态，根回调可用 `setOutcome` 标记业务已失败但正常返回的情况。取消依据宿主确认。只有上报的 Span ID、生产者和执行 Agent 均与可信登记的 `rootSpanId`、`rootProducerId`、`rootAgentId` 匹配时，接入端才更新根运行终态。
 
 SDK 使用标准上下文传播和 OTLP exporter。V1 配置完整的 Trace URL 并使用 HTTP Protobuf 作为 SDK 默认序列化，接收端按 OTLP/HTTP 契约处理。工作负载鉴权 Header 从宿主获取，凭据更新不改变已登记的生产者身份。 [OpenTelemetry Trace API](https://opentelemetry.io/docs/specs/otel/trace/api/) · [W3C Trace Context](https://www.w3.org/TR/trace-context/) · [OTLP exporter 配置](https://opentelemetry.io/docs/specs/otel/protocol/exporter/)
 

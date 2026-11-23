@@ -161,7 +161,7 @@
       <div class="diagram model-diagram" role="region" aria-label="可横向滚动的 Tracing ER 图" tabindex="0">
         <svg viewBox="0 0 1120 800" role="img" aria-labelledby="tracing-er-title tracing-er-desc" xmlns="http://www.w3.org/2000/svg">
           <title id="tracing-er-title">Agent Tracing 实体关系图</title>
-          <desc id="tracing-er-desc">会话关联多条 Trace。Trace 包含多个 Span 和网关工具调用。一个工具调用可匹配一个客户端 Span，有零或一个确认单，可产生多次执行尝试和多条审计事件。</desc>
+          <desc id="tracing-er-desc">会话关联多条 Trace。Trace 包含多个 Span 和网关工具调用。Span 可以有一个父节点和多个子节点。一个工具调用可匹配一个客户端 Span，有零或一个确认单，可产生多次执行尝试和多条审计事件。</desc>
 
           <path class="path er-relationship" d="M 328 116 H 412"/>
           <text class="er-cardinality" x="344" y="106" text-anchor="middle">1</text>
@@ -171,6 +171,10 @@
           <text class="er-cardinality" x="724" y="106" text-anchor="middle">1</text>
           <text class="er-cardinality" x="771" y="106" text-anchor="middle">0..*</text>
           <text class="er-meaning" x="750" y="140" text-anchor="middle">包含</text>
+          <path class="path er-relationship" d="M 892 40 V 24 Q 892 16 900 16 H 1032 Q 1040 16 1040 24 V 40"/>
+          <text class="er-cardinality" x="865" y="33" text-anchor="middle">0..1 父</text>
+          <text class="er-cardinality" x="1067" y="33" text-anchor="middle">0..* 子</text>
+          <text class="er-meaning" x="966" y="33" text-anchor="middle">父子调用</text>
           <path class="path er-relationship" d="M 540 225 V 340"/>
           <text class="er-cardinality" x="551" y="245" text-anchor="middle">1</text>
           <text class="er-cardinality" x="562" y="328" text-anchor="middle">0..*</text>
@@ -230,8 +234,8 @@
             <text class="name" x="808" y="68">Span</text>
             <path class="er-divider" d="M 792 84 H 1088"/>
             <text class="er-key" x="806" y="107">PK</text>
-            <text class="er-attribute" x="841" y="107">span_id</text>
-            <text class="er-description" x="1074" y="107" text-anchor="end">Trace 内节点标识</text>
+            <text class="er-attribute" x="841" y="107">trace_id + span_id</text>
+            <text class="er-description" x="1074" y="107" text-anchor="end">节点标识</text>
             <text class="er-key" x="806" y="132">FK</text>
             <text class="er-attribute" x="841" y="132">trace_id</text>
             <text class="er-description" x="1074" y="132" text-anchor="end">所属 Trace</text>
@@ -251,13 +255,13 @@
             <text class="name" x="48" y="368">AuditEvent</text>
             <path class="er-divider" d="M 32 384 H 328"/>
             <text class="er-key" x="46" y="407">PK</text>
-            <text class="er-attribute" x="81" y="407">event_id</text>
-            <text class="er-description" x="314" y="407" text-anchor="end">事实源内事件标识</text>
+            <text class="er-attribute" x="81" y="407">source + event_id</text>
+            <text class="er-description" x="314" y="407" text-anchor="end">审计事件标识</text>
             <text class="er-key" x="46" y="432">FK</text>
             <text class="er-attribute" x="81" y="432">call_id</text>
             <text class="er-description" x="314" y="432" text-anchor="end">关联工具调用</text>
             <text class="er-attribute" x="81" y="457">source</text>
-            <text class="er-description" x="314" y="457" text-anchor="end">网关、确认或执行器</text>
+            <text class="er-description" x="314" y="457" text-anchor="end">事实源角色与标识</text>
             <text class="er-attribute" x="81" y="482">event_kind</text>
             <text class="er-description" x="314" y="482" text-anchor="end">审计事件类型</text>
             <text class="er-attribute" x="81" y="507">evidence_ref_id</text>
@@ -305,8 +309,8 @@
             <text class="name" x="428" y="612">ExecutionAttempt</text>
             <path class="er-divider" d="M 412 628 H 708"/>
             <text class="er-key" x="426" y="651">PK</text>
-            <text class="er-attribute" x="461" y="651">attempt_id</text>
-            <text class="er-description" x="694" y="651" text-anchor="end">调用内尝试标识</text>
+            <text class="er-attribute" x="461" y="651">call_id + attempt_id</text>
+            <text class="er-description" x="694" y="651" text-anchor="end">尝试标识</text>
             <text class="er-key" x="426" y="676">FK</text>
             <text class="er-attribute" x="461" y="676">call_id</text>
             <text class="er-description" x="694" y="676" text-anchor="end">关联工具调用</text>
