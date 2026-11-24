@@ -1,6 +1,6 @@
 # Agent Tracing SDK API 设计
 
-V1 设计草案 · 2026-11-23
+V1 设计草案 · 2026-11-24
 
 本设计供可信应用入口和 Agent 运行时接入。SDK 给运行过程创建 OpenTelemetry Span，通过 OTLP/HTTP 把结构化元数据送到 `POST /v1/traces`。受管工具的策略决策、确认和执行回执由 Tooling Gateway 审计提供。SDK 自带的工具 Span 负责客户端视角。
 
@@ -184,7 +184,70 @@ export declare function createTracingSdk(options: TracingOptions): TracingSdk
 
 SDK 使用标准上下文传播和 OTLP exporter。V1 配置完整的 Trace URL 并使用 HTTP Protobuf 作为 SDK 默认序列化，接收端按 OTLP/HTTP 契约处理。工作负载鉴权 Header 从宿主获取，凭据更新不改变已登记的生产者身份。 [OpenTelemetry Trace API](https://opentelemetry.io/docs/specs/otel/trace/api/) · [W3C Trace Context](https://www.w3.org/TR/trace-context/) · [OTLP exporter 配置](https://opentelemetry.io/docs/specs/otel/protocol/exporter/)
 
-## 3. 工具 API 与网关响应
+## 3. LangChain 与 LangGraph 接入
+
+在应用启动时创建一次 `LangChainTracing`。每轮由可信请求入口调用 `prepare_config(turn, config=...)`（Python）或 `prepareConfig(turn, existingConfig?)`（TypeScript）。它复用核心 SDK 的原子绑定机制，在调用框架之前完成可信绑定，异步登记 Trace。入参包含已校验的 Session、轮次和根 Agent 标识。适配器返回本轮专用的原生框架配置，把 Dubhe handler 加入已有 callbacks，并保留 `thread_id`、metadata 和其他配置。准备失败沿用核心 SDK 的错误语义。每次框架执行使用一份配置。
+
+handler 使用框架的运行 ID 和父运行 ID 关联事件，将本轮最外层运行映射到已绑定的根 Span。模型和本地工具生成子 Span。受管工具的 HTTP 发送由共享网关客户端创建客户端 Span、传播上下文并读取网关 `call_id`，handler 传递父上下文，同一次发送只记录一个工具客户端 Span。模型适配器可补充框架事件未提供的实际供应商请求字段，内容采集沿用项目策略。
+
+流式路径沿用原生异步迭代器。handler 在框架开始执行时启动根 Span，并根据完成、错误或宿主确认的取消关闭它。流初始化返回时根 Span 仍保持打开。请求入口在断连时关闭迭代器或传递取消信号。实现须验证框架对提前关闭是否稳定发送终态事件，缺少终态时由宿主的执行或流清理处理负责结束 Span，并与随后到达的回调幂等归并。业务输出按原生事件逐块交付，OTLP 后台批量发送已结束的 Span。已准备但未启动的流按核心 SDK 的绑定恢复规则处理。
+
+[LangChain callback 接入参考](https://langfuse.com/integrations/frameworks/langchain) · [Python 流式调用](https://docs.langchain.com/oss/python/langchain/streaming) · [TypeScript 流式调用](https://docs.langchain.com/oss/javascript/langchain/streaming)
+
+### Python
+
+启动时使用 `dubhe` 初始化 SDK。示例中的 `agent` 可以是现有 Agent 或已编译的 Graph，`inputs` 采用它自己的输入格式。
+
+```python
+from contextlib import aclosing
+
+from dubhe import create_tracing_sdk
+from dubhe.langchain import LangChainTracing
+
+langchain_tracing = LangChainTracing(create_tracing_sdk(tracing_options))
+
+async def invoke_turn(turn, inputs, existing_config=None):
+    config = await langchain_tracing.prepare_config(turn, config=existing_config)
+    return await agent.ainvoke(inputs, config=config)
+
+async def stream_turn(turn, inputs, send_chunk, existing_config=None):
+    config = await langchain_tracing.prepare_config(turn, config=existing_config)
+    async with aclosing(agent.astream(inputs, config=config, stream_mode="messages")) as chunks:
+        async for chunk in chunks:
+            await send_chunk(chunk)
+```
+
+### TypeScript
+
+```ts
+import { createTracingSdk } from 'dubhe'
+import { LangChainTracing } from 'dubhe/langchain'
+
+const langchainTracing = new LangChainTracing(createTracingSdk(tracingOptions))
+
+async function invokeTurn(turn: VerifiedTurn, inputs: AgentInputs, existingConfig?: RunnableConfig) {
+  const config = await langchainTracing.prepareConfig(turn, existingConfig)
+  return agent.invoke(inputs, config)
+}
+
+async function streamTurn(
+  turn: VerifiedTurn,
+  inputs: AgentInputs,
+  sendChunk: (chunk: unknown) => Promise<void>,
+  existingConfig: RunnableConfig,
+  signal: AbortSignal,
+) {
+  const config = await langchainTracing.prepareConfig(turn, { ...existingConfig, signal })
+  const chunks = await agent.stream(inputs, { ...config, streamMode: 'messages' })
+  for await (const chunk of chunks) {
+    await sendChunk(chunk)
+  }
+}
+```
+
+`VerifiedTurn`、`AgentInputs` 和 `RunnableConfig` 分别表示应用已验证的轮次类型、现有 Agent/Graph 的输入类型和框架配置类型。示例中的 SDK 入口为拟议接口。流式路径的 `send_chunk` / `sendChunk` 由应用实现，逐块发送可展示内容。TypeScript 的 `signal` 由宿主在客户端断连时触发。
+
+## 4. 工具 API 与网关响应
 
 | 场景 | SDK 动作 | Tracing 展示 |
 | --- | --- | --- |
@@ -231,7 +294,7 @@ export async function runTurn() {
 
 模型适配器在发出请求前用 `recordRequest` 传入最终模型名、采样参数和实际输入。单独传给模型的 System Prompt 放入 `systemInstructions`，消息中的 System Prompt、User Prompt 和历史消息按发送顺序记录到 `messages`。适配器用 `recordUsage` 写入已知 Token 数。SDK 的 `captureModelInputs` 关闭时不缓存或发送原文。接入端按项目和环境策略独立校验，关闭时也立即停止返回原文详情。接入端根据可信目录验证请求模型名并保存规范名，无法验证的名称不写入摘要。
 
-## 4. V1 Span 属性与逻辑映射
+## 5. V1 Span 属性与逻辑映射
 
 Dubhe 用 `dubhe.*` 属性传输自己的业务语义。跨进程身份通过认证与可信登记校验。结构化字段来自允许的枚举或目录。已开启采集的模型输入只通过指定内容属性上报，实际发出的历史消息可能包含前序模型回复和工具结果。当前调用的独立输出、认证头、异常栈及任意自定义属性不采集。模型参数不可得时保持缺失。
 
@@ -255,9 +318,10 @@ Dubhe 用 `dubhe.*` 属性传输自己的业务语义。跨进程身份通过认
 
 `producer_id` 和唯一作用域从认证求得，Session 从该范围的可信 Trace 登记求得。每个批次可混合此范围内的不同 Trace。`metadata` 是 Tracing 归一化后的逻辑 JSON。OTLP 仍分属性传输，模型输入适配为 GenAI 约定的内容结构。语言 SDK 缺少结构化属性能力时可按约定使用 JSON 字符串，接入端解析并校验后写入相同结构。 [OpenTelemetry GenAI 属性](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/)
 
-## 5. 投递与验收
+## 6. 投递与验收
 
 - 运行时采集与业务执行分开。缓冲满时丢弃新遥测并增加丢弃计数，SDK 的队列不调用网关，也不承担网关审计重放。
 - 只有 OTLP 可重试失败或连接中断才退避重发同一批次。成功响应根据协议处理部分成功，整批不重发。服务端在已验证的租户、环境和项目范围内按 `span_id` 幂等持久化，并校验重传数据的 `trace_id` 与原归属一致。SDK 记录接收失败、超过截止、队列丢弃及拒绝数量，指标按受控原因分类。
 - `flush` 有调用方时限。队列排空表示本进程待处理记录已完成本地投递流程，包括失败终止或被拒绝的记录。它适合测试、短任务结束和应用退场。`shutdown` 停止接收新遥测再尽力排空，可重复调用。业务回调的行为继续由业务决定。
+- LangChain 和 LangGraph 验收覆盖已有 callback 和 checkpoint 配置保留、普通调用成功和异常、首块早于流完成送达、流中途报错、断连和提前关闭，以及 OTLP 暂时不可用时业务流继续输出。每轮根 Span 只结束一次。
 - 验收覆盖多轮根 Trace、并行和跨进程父子关系、在绑定后开始回调前退出的宿主恢复、登记故障和恢复、SDK 重传、网关拒绝却有调用 ID、无响应超时、仅本地调用、两路数据的不同到达顺序、错误作用域及禁采属性不出现在真实 OTLP 包中。 [OTLP/HTTP 规范](https://opentelemetry.io/docs/specs/otlp/#otlphttp)
