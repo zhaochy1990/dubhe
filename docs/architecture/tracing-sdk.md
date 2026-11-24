@@ -190,7 +190,7 @@ SDK 使用标准上下文传播和 OTLP exporter。V1 配置完整的 Trace URL 
 
 handler 使用框架的运行 ID 和父运行 ID 关联事件，将本轮最外层运行映射到已绑定的根 Span。模型和本地工具生成子 Span。受管工具的 HTTP 发送由共享网关客户端创建客户端 Span、传播上下文并读取网关 `call_id`，handler 传递父上下文，同一次发送只记录一个工具客户端 Span。模型适配器可补充框架事件未提供的实际供应商请求字段，内容采集沿用项目策略。
 
-流式路径沿用原生异步迭代器。handler 在框架开始执行时启动根 Span，并根据完成、错误或宿主确认的取消关闭它。流初始化返回时根 Span 仍保持打开。请求入口在断连时关闭迭代器或传递取消信号。实现须验证框架对提前关闭是否稳定发送终态事件，缺少终态时由宿主的执行或流清理处理负责结束 Span，并与随后到达的回调幂等归并。业务输出按原生事件逐块交付，OTLP 后台批量发送已结束的 Span。已准备但未启动的流按核心 SDK 的绑定恢复规则处理。
+流式路径沿用原生异步迭代器。准备配置时由核心 SDK 创建候选根 Span 并绑定其 ID。框架开始执行时，handler 接管同一个 Span。handler 根据完成、错误或宿主确认的取消关闭它。流初始化返回时根 Span 仍保持打开。请求入口在断连时关闭迭代器或传递取消信号，并在退出时调用幂等的 `finish(config)`。它释放该轮配置持有的状态。缺少终态回调时，它根据宿主确认的结果结束根 Span，未能核实结果时仅结束 Span，运行终态保持缺失。与随后到达的回调幂等归并。业务输出按原生事件逐块交付，OTLP 后台批量发送已结束的 Span。已准备但未启动的流按核心 SDK 的绑定恢复规则处理，候选根 Span 不导出。
 
 [LangChain callback 接入参考](https://langfuse.com/integrations/frameworks/langchain) · [Python 流式调用](https://docs.langchain.com/oss/python/langchain/streaming) · [TypeScript 流式调用](https://docs.langchain.com/oss/javascript/langchain/streaming)
 
@@ -208,13 +208,19 @@ langchain_tracing = LangChainTracing(create_tracing_sdk(tracing_options))
 
 async def invoke_turn(turn, inputs, existing_config=None):
     config = await langchain_tracing.prepare_config(turn, config=existing_config)
-    return await agent.ainvoke(inputs, config=config)
+    try:
+        return await agent.ainvoke(inputs, config=config)
+    finally:
+        langchain_tracing.finish(config)
 
 async def stream_turn(turn, inputs, send_chunk, existing_config=None):
     config = await langchain_tracing.prepare_config(turn, config=existing_config)
-    async with aclosing(agent.astream(inputs, config=config, stream_mode="messages")) as chunks:
-        async for chunk in chunks:
-            await send_chunk(chunk)
+    try:
+        async with aclosing(agent.astream(inputs, config=config, stream_mode="messages")) as chunks:
+            async for chunk in chunks:
+                await send_chunk(chunk)
+    finally:
+        langchain_tracing.finish(config)
 ```
 
 ### TypeScript
@@ -227,7 +233,11 @@ const langchainTracing = new LangChainTracing(createTracingSdk(tracingOptions))
 
 async function invokeTurn(turn: VerifiedTurn, inputs: AgentInputs, existingConfig?: RunnableConfig) {
   const config = await langchainTracing.prepareConfig(turn, existingConfig)
-  return agent.invoke(inputs, config)
+  try {
+    return await agent.invoke(inputs, config)
+  } finally {
+    langchainTracing.finish(config)
+  }
 }
 
 async function streamTurn(
@@ -238,9 +248,13 @@ async function streamTurn(
   signal: AbortSignal,
 ) {
   const config = await langchainTracing.prepareConfig(turn, { ...existingConfig, signal })
-  const chunks = await agent.stream(inputs, { ...config, streamMode: 'messages' })
-  for await (const chunk of chunks) {
-    await sendChunk(chunk)
+  try {
+    const chunks = await agent.stream(inputs, { ...config, streamMode: 'messages' })
+    for await (const chunk of chunks) {
+      await sendChunk(chunk)
+    }
+  } finally {
+    langchainTracing.finish(config)
   }
 }
 ```
