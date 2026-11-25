@@ -288,19 +288,32 @@ td {
 .trace-work-head small {
   color: #71878b;
 }
-.trace-axis {
-  display: flex;
-  justify-content: space-between;
-  margin: 12px 65px 0 210px;
-  color: #8a9b9d;
-  font-size: 11px;
-}
+.trace-axis,
 .waterfall-row {
   display: grid;
   grid-template-columns: 190px minmax(90px, 1fr) 60px;
   gap: 10px;
   align-items: center;
   padding: 12px 16px;
+}
+.trace-axis {
+  color: var(--muted);
+  font-size: 11px;
+  padding-block-end: 0;
+}
+.trace-axis-labels {
+  grid-column: 2;
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+}
+.trace-axis-labels span {
+  white-space: nowrap;
+}
+.trace-axis-labels span:nth-child(2) {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
 }
 .waterfall-row {
   width: 100%;
@@ -349,12 +362,6 @@ td {
   .trace-inspector {
     border-left: 0;
     border-top: 1px solid #e1e9e8;
-  }
-  .trace-axis {
-    margin-left: 155px;
-  }
-  .waterfall-row {
-    grid-template-columns: 135px minmax(50px, 1fr) 48px;
   }
 }
 .view-switch {
@@ -411,14 +418,14 @@ td {
   color: #526b70;
 }
 @media (max-width: 1200px) {
-  .trace-page-body .waterfall-row:not(.tree-row) {
+  .trace-axis,
+  .waterfall-row:not(.tree-row) {
     grid-template-columns: minmax(110px, 1fr) minmax(34px, 1fr) 52px;
     gap: 6px;
     padding: 10px;
   }
-  .trace-page-body .trace-axis {
-    margin-left: 38%;
-    margin-right: 55px;
+  .trace-axis {
+    padding-block-end: 0;
   }
 }
 .io-box {

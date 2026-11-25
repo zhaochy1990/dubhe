@@ -28,6 +28,7 @@ const sessionData = [
   ],
 ];
 const sessionAges = [0, 2, 9];
+const demoMinuteOfDay = 11 * 60;
 function renderSessions(state = {}) {
   document.getElementById("crumb").textContent = "Agent 观测";
   let p = document.getElementById("page");
@@ -53,7 +54,13 @@ function renderSessions(state = {}) {
     const counts = Array.from({ length: bucketCount }, () => 0);
     for (const row of filtered) {
       const age = sessionAges[sessionData.indexOf(row)];
-      counts[bucketCount - 1 - age]++;
+      const [hour, minute] = row[3].split(" ").at(-1).split(":").map(Number);
+      const ageHours = Math.floor(
+        (age * 1440 + demoMinuteOfDay - hour * 60 - minute) / 60,
+      );
+      const offset = days === 1 ? ageHours : age;
+      if (offset >= 0 && offset < bucketCount)
+        counts[bucketCount - 1 - offset]++;
     }
     p.querySelector("#sessionBars").innerHTML = counts
       .map((count) => `<i style="height:${count ? count * 36 : 0}px"></i>`)
@@ -213,7 +220,7 @@ function renderTrace(id, listState = {}) {
     let canvas = tracePage.querySelector("#traceCanvas");
     canvas.innerHTML =
       (view === "timeline"
-        ? `<div class="trace-axis"><span>0 ms</span><span>640 ms</span><span>1280 ms</span></div>`
+        ? `<div class="trace-axis"><div class="trace-axis-labels"><span>0 ms</span><span>640 ms</span><span>1280 ms</span></div></div>`
         : "") +
       nodes
         .map(
