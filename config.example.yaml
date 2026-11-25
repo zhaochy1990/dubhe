@@ -1,0 +1,25 @@
+server:
+  listen: "127.0.0.1:8080"
+
+database:
+  driver: sqlite
+  sqlite:
+    dsn: "./dubhe.db"
+  mysql:
+    dsn: "dubhe:change-me@tcp(127.0.0.1:3306)/dubhe"
+    # read_dsn: "dubhe_reader:change-me@tcp(127.0.0.1:3306)/dubhe"
+
+# Replace these sample API keys with independently generated secrets.
+auth:
+  workloads:
+    - api_key: "local-workload-key"
+      scope: &scope {tenant_id: "tenant-alpha", environment_id: "staging", project_id: "support"}
+      producer_id: "agent-worker"
+  registrars:
+    - api_key: "local-registration-key"
+      scope: *scope
+      producer_id: "agent-worker"
+  readers:
+    - api_key: "local-reader-key"
+      scope: *scope
+      agent_ids: ["support-agent"]
