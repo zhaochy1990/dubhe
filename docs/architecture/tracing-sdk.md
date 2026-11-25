@@ -323,6 +323,8 @@ Dubhe 用 `dubhe.*` 属性传输自己的业务语义。跨进程身份通过认
 | `gen_ai.usage.input_tokens`、`gen_ai.usage.output_tokens` | 已知输入及输出计数 | `metadata.input_tokens`、`metadata.output_tokens` |
 | `gen_ai.request.max_tokens`、`gen_ai.request.temperature` | 已知输出上限和采样参数 | `metadata.max_output_tokens`、`metadata.temperature` |
 | `gen_ai.system_instructions`、`gen_ai.input.messages` | 独立的 System Prompt 和按顺序发送的输入消息 | `metadata.system_instructions`、`metadata.messages` |
+| `gen_ai.tool.definitions` | 供应商请求中暴露的函数定义 | `metadata.tool_definitions` |
+| `gen_ai.request.reasoning.effort` | 供应商明确暴露的推理强度 | `metadata.reasoning_effort` |
 | `dubhe.tool.id` | 可信目录工具 ID | `metadata.tool_id` |
 | `dubhe.tool.route` | `gateway`、`local`、`direct` | `metadata.tool_route` |
 | `dubhe.tool.call_id` | 网关已回传的调用 ID，仅用于 SDK 工具 Span | `metadata.client_call_id` |

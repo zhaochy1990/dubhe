@@ -1,6 +1,6 @@
 # Dubhe
 
-Dubhe 为 LangChain Agent 提供 Tracing。TypeScript SDK `@lipaotech/dubhe` 通过 LangChain callback 记录运行和模型 Span。Go 服务接收 OTLP/HTTP 数据，在数据库事务提交后确认，并按租户、环境、项目及 Agent 授权查询。服务支持 MySQL InnoDB 和本地 SQLite 文件。
+Dubhe 为 LangChain Agent 提供 Tracing。TypeScript SDK `@lipaotech/dubhe` 通过 LangChain callback 记录运行、模型、子 Agent 和工具客户端 Span。Go 服务接收 OTLP/HTTP 数据，在数据库事务提交后确认，并按租户、环境、项目及 Agent 授权查询。服务支持 MySQL InnoDB 和本地 SQLite 文件。
 
 ## TypeScript 和 Go 端到端验收
 
@@ -10,7 +10,7 @@ Dubhe 为 LangChain Agent 提供 Tracing。TypeScript SDK `@lipaotech/dubhe` 通
 ./scripts/test-tracing-v1.sh
 ```
 
-脚本先执行 Go API 测试，再用临时 SQLite 文件启动真实 Go HTTP 服务、构建 TypeScript 包并执行端到端验收。模型由测试控制，无需供应商凭据。Go 测试通过 `t.TempDir()` 清理各自的数据库，脚本退出时删除端到端验收的临时文件。CI 可以直接执行 `go test ./...` 或运行完整脚本。可通过 `GO` 指定 Go 工具链路径。
+脚本先执行 Go API 测试，再用临时 SQLite 文件启动真实 Go HTTP 服务、构建 TypeScript 包并执行端到端验收。模型由测试控制，无需供应商凭据。Go 测试通过 `t.TempDir()` 清理各自的数据库，脚本退出时删除端到端验收的临时文件。CI 可以直接执行 `go test ./...` 或运行完整脚本。可通过 `GO` 指定 Go 工具链路径。设置 `DUBHE_TEST_MYSQL_DSN` 可在专用的 MySQL 8.4 测试库运行同一组 TypeScript 端到端用例。
 
 ### 接入 TypeScript Agent
 
@@ -43,6 +43,8 @@ try {
 
 流式调用沿用 `await agent.stream(input, { ...config, streamMode: "messages" })` 返回的异步迭代器。应用负责消费和关闭迭代器，退出时调用 `finish(config)`。提前关闭时由可信宿主确认轮次的取消结果。应用退出时可用 `await sdk.shutdown({ timeoutMs: 5_000 })` 排空遥测。
 
+启用 `captureModelInputs` 后，SDK 记录 callback 可见的有序输入和独立系统指令。模型名由服务端作用域目录验证，其他模型字段取自供应商 callback 暴露的请求参数和实际用量。可信入口可登记 `VerifiedTurn.agentGrants` 和 `sessionInitiator`。用 `tracing.withAgent(config, agentId, childConfig => child.invoke(input, childConfig))` 记录已授权的子 Agent。通过 `LangChainTracing` 的 `localTools` 映射识别原生本地工具。网关或直连发送由共享客户端用 `tracing.withTool` 包装。网关客户端用 `gatewayHeaders` 注入已允许 origin 的绑定头，禁用自动重定向，并用 `recordResponse` 记录响应状态与网关回传的 `x-dubhe-call-id`。
+
 ### 运行 Go Tracing 服务
 
 服务用 Viper 加载 YAML 配置，`--database-driver` 可在启动时选择 `sqlite` 或 `mysql`。[示例配置](config.example.yaml)
@@ -54,16 +56,24 @@ go run ./cmd/dubhe-tracing --config config.yaml --database-driver mysql
 
 数据库连接取自 `database.sqlite` 或 `database.mysql`。其中 `dsn` 用于写入，可选的 `read_dsn` 为查询配置同库的独立连接池。MySQL 查询账号可仅授予 `SELECT` 权限。配置优先级由高到低为命令行、环境变量和 YAML。可用 `DUBHE_DATABASE_DRIVER`、`DUBHE_LISTEN`、`DUBHE_SQLITE_DSN`、`DUBHE_MYSQL_DSN` 及对应的 `READ_DSN` 环境变量覆盖配置。`DUBHE_TRACING_AUTH` 仍接受旧版 JSON 鉴权配置。
 
-YAML 的 `auth` 配置提供 `workloads`、`registrars` 和 `readers` 三类身份。分别为上报、登记和查询配置独立的随机 `api_key`，客户端在请求中发送 `X-API-Key`。各身份绑定 `scope`，上报和登记身份还绑定 `producer_id`，读身份包含 `agent_ids`。
+YAML 的 `auth` 分别为 `workloads`、`registrars`、`gateways` 和 `readers` 配置独立的 `api_key`。请求使用 `X-API-Key`。各身份绑定 `scope`，写身份还绑定 `producer_id`，读身份包含 `agent_ids`。读身份可独立授予 `model_input` 和 `tool_parameters`。跨项目读者可配置 `grants`，每个条目独立定义作用域、Agent 范围和内容权限。多个查询实例可配置同一个 `tracing.cursor_signing_key`，以支持跨实例分页。
+
+按作用域设置 `tracing.scopes[].content_days` 可启用内容保存。设置 `content_enabled_since` 可将延迟到达的登记按可信登记时间与策略生效时间求交。内容在到期或关闭采集时停止展示，并由服务清理。会话列表和 Trace 拓扑返回结构化摘要。Agent 展示名、模型名和 SDK 工具标识来自作用域目录。
 
 旧版 YAML 的 `token` 字段和 `DUBHE_TRACING_AUTH` 中的凭据继续接受 `Authorization: Bearer`。Go 的 `authenticator` 接口负责把请求凭据解析后的值映射为指定角色的身份，供后续接入 OAuth 2.0。[OAuth 2.0 实现票 #10](https://github.com/zhaochy1990/dubhe/issues/10)
 
 - `POST /internal/v1/observability/runs` 接受可信入口使用独立内部凭据提交的轮次绑定。
 - `POST /v1/traces` 接受以工作负载身份鉴权的 OTLP/HTTP 二进制 Protobuf 批次，支持 gzip。
-- `GET /v1/observability/traces/{trace_id}` 返回 Trace 及其节点。
-- `GET /v1/observability/nodes/span:{span_id}` 返回单个 Span，可带 `expected_trace_id` 确认 Trace 归属。
+- `POST /internal/v1/observability/gateway-events` 接收网关 Outbox 的可信事件，提交后返回 204。网关发送每个调用的唯一 `event_id`、`call_id`、从可信绑定获得的 `trace_id`、已验证的可选 `span_id`、`agent_id`、`tool_id`、`sequence`、`type`、`occurred_at`、`decision`、`execution_state`、`policy_version` 和 `initiator`。首条决策可携带用于判定的 `parameters`。登记或前序事件尚未到达时返回可重试的 503。
+- `GET /v1/observability/tool-calls/{call_id}/trace` 返回可见网关调用的 Trace 和节点标识。
+- `GET /v1/observability/sessions` 返回会话、总数、Agent 选项和时间分布，支持 `from`、`to`、`agent_id`、`result`、`q`、`tz`、`limit` 和 `cursor`。时间参数使用 RFC 3339。
+- `GET /v1/observability/sessions/{session_id}/traces` 返回多轮 Trace 摘要，支持 `limit` 和 `cursor`。
+- `GET /v1/observability/traces/{trace_id}` 返回 Trace 及其节点。节点支持 `limit` 和 `cursor`，并标记当前页尚未加载的可见父节点。
+- `GET /v1/observability/nodes/{node_id}` 返回 `span:{span_id}` 或 `tool:{call_id}` 的详情，可带 `expected_trace_id` 确认 Trace 归属。
 
-查询须提供 `tenant_id`、`environment_id` 和 `project_id` 参数，并通过 `X-API-Key` 发送有相应作用域和 Agent 权限的读身份凭据。
+设置 `tracing.gateway_outboxes` 可拉取网关 Outbox。每个来源配置 `url`、`api_key`、`scope` 和 `source_id`。Tracing 向 `{url}/lease` 提交 `{"limit":32}`。网关返回 204 或包含 `deliveries` 的 JSON，每项包含 `lease_token`、`version: 1` 和 `event`。Tracing 提交投影后向 `{url}/ack` 发送 `{"lease_token":"…"}`，网关用 204 确认。只有网关观测时，首条事件可通过 `gateway_binding` 提供经过验证的 Session 与 Trace 登记时间。
+
+查询使用 `X-API-Key` 发送具有作用域和 Agent 权限的读身份凭据。详情和会话下的 Trace 列表须提供 `tenant_id`、`environment_id` 和 `project_id`。会话列表可直接使用读身份的完整作用域。
 
 ## Python 参考实现
 
@@ -117,7 +127,7 @@ async def invoke_turn(agent, verified_turn, inputs, existing_config=None):
 `dubhe.service.create_app(store, auth)` 构建 ASGI 应用，可用 Uvicorn 运行。通过 `TraceStore.initialize_schema()` 初始化 MySQL 表，然后用可信的内部适配器调用 `TraceStore.register_run()`。可以用 `query_store` 为查询配置独立的只读 MySQL 账号。
 
 - `POST /v1/traces` 接收以工作负载身份鉴权的二进制 Protobuf 批次，支持 gzip。
-- `GET /v1/observability/traces/{trace_id}` 返回 Trace 及其节点。
+- `GET /v1/observability/traces/{trace_id}` 返回 Trace 及其节点。节点支持 `limit` 和 `cursor`，并标记当前页尚未加载的可见父节点。
 - `GET /v1/observability/nodes/span:{span_id}` 返回单个 Span，可带 `expected_trace_id` 约束 Trace 归属。
 
 两个查询均需要读身份和 `tenant_id`、`environment_id`、`project_id` 查询参数。当前参考实现一次返回 Trace 的授权节点。SDK 的登记缓冲和 OTLP 批处理队列受 `max_buffered_spans` 限制，缓冲或队列溢出时可能丢弃 Span。

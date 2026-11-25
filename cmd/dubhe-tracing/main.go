@@ -55,12 +55,23 @@ func run(args []string) error {
 		}
 		defer readPool.Close()
 	}
-	handler, err := tracing.NewHandler(db, readDB, cfg.Auth)
+	handler, err := tracing.NewHandler(db, readDB, cfg.Auth, cfg.Tracing)
 	if err != nil {
 		return err
 	}
 	if err := tracing.InitializeDatabase(startup, db); err != nil {
 		return fmt.Errorf("initialize tracing schema: %w", err)
+	}
+	if err := tracing.PurgeContent(startup, db, cfg.Tracing); err != nil {
+		return err
+	}
+	outboxes := make([]*tracing.GatewayOutbox, 0, len(cfg.Tracing.Outboxes))
+	for _, config := range cfg.Tracing.Outboxes {
+		consumer, err := tracing.NewGatewayOutbox(db, cfg.Tracing, config)
+		if err != nil {
+			return err
+		}
+		outboxes = append(outboxes, consumer)
 	}
 	cancel()
 	listener, err := net.Listen("tcp", cfg.Server.Listen)
@@ -77,6 +88,25 @@ func run(args []string) error {
 	}
 	exit, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	for _, consumer := range outboxes {
+		go consumer.Run(exit, func(err error) { log.Print(err) })
+	}
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-exit.Done():
+				return
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(exit, 30*time.Second)
+				if err := tracing.PurgeContent(ctx, db, cfg.Tracing); err != nil && exit.Err() == nil {
+					log.Print(err)
+				}
+				cancel()
+			}
+		}
+	}()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

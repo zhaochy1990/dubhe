@@ -62,6 +62,8 @@ export function readNode(
 
 interface ModelOptions {
   invokeError?: Error;
+  invocationParams?: Record<string, unknown>;
+  tokens?: { input_tokens: number; output_tokens: number; total_tokens: number };
   stream?: (options: { signal?: AbortSignal }) => AsyncGenerator<ChatGenerationChunk>;
 }
 
@@ -78,9 +80,13 @@ export class TestModel extends BaseChatModel {
     return 'dubhe-test-model';
   }
 
+  invocationParams() {
+    return this.fixture.invocationParams ?? {};
+  }
+
   async _generate(): Promise<ChatResult> {
     if (this.fixture.invokeError) throw this.fixture.invokeError;
-    return { generations: [{ text: answer, message: new AIMessage(answer) }] };
+    return { generations: [{ text: answer, message: new AIMessage({ content: answer, usage_metadata: this.fixture.tokens }) }] };
   }
 
   async *_streamResponseChunks(
@@ -101,7 +107,7 @@ export class TestModel extends BaseChatModel {
 
 export function setup(
   otlpUrl = `${baseUrl}/v1/traces`,
-  delivery: Partial<Pick<TracingOptions, 'registration' | 'maxBufferedSpans'>> = {},
+  delivery: Partial<Pick<TracingOptions, 'registration' | 'maxBufferedSpans' | 'captureModelInputs' | 'gatewayOrigins'>> = {},
 ) {
   const bindings = new Map<string, VerifiedRun>();
   const outcomes = new Map<string, RunOutcome>();
@@ -118,12 +124,17 @@ export function setup(
         return { outcome: 'started', binding: candidate };
       },
       getRunOutcome: (binding) => outcomes.get(binding.traceId),
+      async getGatewayBinding(binding, agentId) {
+        return JSON.stringify({ traceId: binding.traceId, agentId });
+      },
     },
     registration: delivery.registration ?? createHttpRunRegistration({
       url: `${baseUrl}/internal/v1/observability/runs`,
       getHeaders: async () => ({ 'X-API-Key': 'register-token' }),
     }),
     maxBufferedSpans: delivery.maxBufferedSpans,
+    captureModelInputs: delivery.captureModelInputs,
+    gatewayOrigins: delivery.gatewayOrigins,
   });
   return {
     sdk,

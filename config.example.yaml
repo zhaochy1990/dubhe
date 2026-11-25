@@ -19,7 +19,32 @@ auth:
     - api_key: "local-registration-key"
       scope: *scope
       producer_id: "agent-worker"
+  gateways:
+    - api_key: "local-gateway-audit-key"
+      scope: *scope
+      producer_id: "tool-gateway"
   readers:
     - api_key: "local-reader-key"
       scope: *scope
       agent_ids: ["support-agent"]
+      # model_input: true
+      # tool_parameters: true
+
+tracing:
+  trace_days: 30
+  # cursor_signing_key: "replace-with-a-shared-random-secret"
+  # gateway_outboxes:
+  #   - url: "https://gateway.example/internal/v1/outbox"
+  #     api_key: "replace-with-an-outbox-reader-key"
+  #     scope: *scope
+  #     source_id: "tool-gateway"
+  scopes:
+    - scope: *scope
+      # Set content_days explicitly to enable model inputs and tool parameters.
+      # content_days: 7
+      # content_enabled_since: "2026-11-25T00:00:00Z"
+      agents:
+        - {id: "support-agent", name: "Customer Support"}
+      models:
+        - {id: "support-model", name: "qwen-plus"}
+      tool_ids: ["orders.lookup"]
