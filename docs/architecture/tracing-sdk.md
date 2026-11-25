@@ -190,7 +190,7 @@ SDK 使用标准上下文传播和 OTLP exporter。V1 配置完整的 Trace URL 
 
 handler 使用框架的运行 ID 和父运行 ID 关联事件，将本轮最外层运行映射到已绑定的根 Span。模型和本地工具生成子 Span。受管工具的 HTTP 发送由共享网关客户端创建客户端 Span、传播上下文并读取网关 `call_id`，handler 传递父上下文，同一次发送只记录一个工具客户端 Span。模型适配器可补充框架事件未提供的实际供应商请求字段，内容采集沿用项目策略。
 
-流式路径沿用原生异步迭代器。准备配置时由核心 SDK 创建候选根 Span 并绑定其 ID。框架开始执行时，handler 接管同一个 Span。handler 根据完成、错误或宿主确认的取消关闭它。流初始化返回时根 Span 仍保持打开。请求入口在断连时关闭迭代器或传递取消信号，并在退出时调用幂等的 `finish(config)`。它释放该轮配置持有的状态。缺少终态回调时，它根据宿主确认的结果结束根 Span，未能核实结果时仅结束 Span，运行终态保持缺失。与随后到达的回调幂等归并。业务输出按原生事件逐块交付，OTLP 后台批量发送已结束的 Span。已准备但未启动的流按核心 SDK 的绑定恢复规则处理，候选根 Span 不导出。
+流式路径沿用原生异步迭代器。准备配置时由核心 SDK 创建候选根 Span 并绑定其 ID。框架开始执行时，handler 接管同一个 Span。流初始化返回时根 Span 仍保持打开。请求入口在断连时关闭迭代器或传递取消信号，并在退出时调用幂等的 `finish(config)`，释放该轮配置持有的状态。TypeScript handler 在终态回调中记下框架结果与结束时刻，`finish(config)` 优先采用宿主确认的结果，并按已记录的时刻结束根 Span。模型服务异常按失败记录。提前关闭时若宿主未确认结果，运行终态保持缺失。业务输出按原生事件逐块交付，OTLP 后台批量发送已结束的 Span。已准备但未启动的流按核心 SDK 的绑定恢复规则处理，候选根 Span 不导出。
 
 [LangChain callback 接入参考](https://langfuse.com/integrations/frameworks/langchain) · [Python 流式调用](https://docs.langchain.com/oss/python/langchain/streaming) · [TypeScript 流式调用](https://docs.langchain.com/oss/javascript/langchain/streaming)
 
@@ -335,6 +335,7 @@ Dubhe 用 `dubhe.*` 属性传输自己的业务语义。跨进程身份通过认
 ## 6. 投递与验收
 
 - 运行时采集与业务执行分开。缓冲满时丢弃新遥测并增加丢弃计数，SDK 的队列不调用网关，也不承担网关审计重放。
+- TypeScript SDK 的待登记任务数最多为 `maxBufferedSpans`。轮次关闭且没有待发送 Span 时取消其待登记任务。自定义 `RunRegistration` 需要响应传入的 `AbortSignal`。已缓冲的 Span 继续等待原轮次绑定登记成功后再导出。
 - 只有 OTLP 可重试失败或连接中断才退避重发同一批次。成功响应根据协议处理部分成功，整批不重发。服务端在已验证的租户、环境和项目范围内按 `span_id` 幂等持久化，并校验重传数据的 `trace_id` 与原归属一致。SDK 记录接收失败、超过截止、队列丢弃及拒绝数量，指标按受控原因分类。
 - `flush` 有调用方时限。队列排空表示本进程待处理记录已完成本地投递流程，包括失败终止或被拒绝的记录。它适合测试、短任务结束和应用退场。`shutdown` 停止接收新遥测再尽力排空，可重复调用。业务回调的行为继续由业务决定。
 - LangChain 和 LangGraph 验收覆盖已有 callback 和 checkpoint 配置保留、普通调用成功和异常、首块早于流完成送达、流中途报错、断连和提前关闭，以及 OTLP 暂时不可用时业务流继续输出。每轮根 Span 只结束一次。

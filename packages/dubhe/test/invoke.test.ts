@@ -5,6 +5,7 @@ import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { CallbackManager } from '@langchain/core/callbacks/manager';
 import type { RunnableConfig } from '@langchain/core/runnables';
 import { MemorySaver } from '@langchain/langgraph';
+import { SpanStatusCode } from '@opentelemetry/api';
 import { createAgent } from 'langchain';
 import { answer, assertTrace, baseUrl, inputs, newTurn, readNode, readTrace, scope, setup, TestModel } from './support.js';
 
@@ -18,6 +19,24 @@ class ExistingCallback extends BaseCallbackHandler {
     this.invocations.push(args[6]?.integration_marker);
   }
 }
+
+test('native invoke preserves the provider exception and records one failed root', live, async (t) => {
+  const { sdk, tracing, binding } = setup();
+  t.after(() => sdk.shutdown({ timeoutMs: 5_000 }));
+  const turn = newTurn();
+  const providerError = new Error('Provider invoke failed');
+  const agent = createAgent({ model: new TestModel({ invokeError: providerError }), tools: [] });
+  const config = await tracing.prepareConfig(turn);
+  try {
+    await assert.rejects(agent.invoke(inputs, config), (error) => error === providerError);
+  } finally {
+    tracing.finish(config);
+  }
+
+  assert.deepEqual(await sdk.flush({ timeoutMs: 5_000 }), { outcome: 'drained' });
+  const trace = await assertTrace(binding(turn), 'failed');
+  assert.deepEqual(trace.nodes.map((node) => node.status), [SpanStatusCode.ERROR, SpanStatusCode.ERROR]);
+});
 
 test('native invoke preserves callbacks and checkpoints and builds an authorized Trace tree', live, async (t) => {
   const { sdk, tracing, binding } = setup();

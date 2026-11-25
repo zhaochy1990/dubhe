@@ -93,16 +93,17 @@ func bearer[T any](request *http.Request, identities map[string]T) (T, bool) {
 }
 
 type service struct {
-	store store
-	auth  authConfig
+	writeStore store
+	readStore  store
+	auth       authConfig
 }
 
-func NewHandler(db *sql.DB, rawAuth string) (http.Handler, error) {
+func NewHandler(writeDB, readDB *sql.DB, rawAuth string) (http.Handler, error) {
 	auth, err := parseAuth(rawAuth)
 	if err != nil {
 		return nil, err
 	}
-	srv := service{store{db}, auth}
+	srv := service{writeStore: store{writeDB}, readStore: store{readDB}, auth: auth}
 	handler := http.NewServeMux()
 	handler.HandleFunc("POST /v1/traces", srv.ingest)
 	handler.HandleFunc("POST /internal/v1/observability/runs", srv.register)
@@ -153,7 +154,7 @@ func (s service) ingest(w http.ResponseWriter, r *http.Request) {
 	if len(records) != 0 {
 		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 		defer cancel()
-		rejectedByStore, err := s.store.ingest(ctx, identity, records)
+		rejectedByStore, err := s.writeStore.ingest(ctx, identity, records)
 		if err != nil {
 			writeOTLPError(w, http.StatusServiceUnavailable, code.Code_UNAVAILABLE, "Tracing storage unavailable")
 			return
@@ -228,7 +229,7 @@ func (s service) register(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
-	switch err := s.store.register(ctx, run); {
+	switch err := s.writeStore.register(ctx, run); {
 	case errors.Is(err, errRegistrationConflict):
 		writeDetail(w, http.StatusConflict, errRegistrationConflict.Error())
 	case err != nil:
@@ -260,7 +261,7 @@ func (s service) getTrace(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
-	trace, err := s.store.trace(ctx, identity, traceID)
+	trace, err := s.readStore.trace(ctx, identity, traceID)
 	switch {
 	case err != nil:
 		writeDetail(w, http.StatusServiceUnavailable, "Tracing storage unavailable")
@@ -289,7 +290,7 @@ func (s service) getNode(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
-	node, err := s.store.node(ctx, identity, spanID, traceID)
+	node, err := s.readStore.node(ctx, identity, spanID, traceID)
 	switch {
 	case err != nil:
 		writeDetail(w, http.StatusServiceUnavailable, "Tracing storage unavailable")

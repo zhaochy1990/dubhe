@@ -9,6 +9,7 @@ import {
   createTracingSdk,
   type RunOutcome,
   type TraceScope,
+  type TracingOptions,
   type VerifiedRun,
   type VerifiedTurn,
 } from 'dubhe';
@@ -98,7 +99,10 @@ export class TestModel extends BaseChatModel {
   }
 }
 
-export function setup(otlpUrl = `${baseUrl}/v1/traces`) {
+export function setup(
+  otlpUrl = `${baseUrl}/v1/traces`,
+  delivery: Partial<Pick<TracingOptions, 'registration' | 'maxBufferedSpans'>> = {},
+) {
   const bindings = new Map<string, VerifiedRun>();
   const outcomes = new Map<string, RunOutcome>();
   const sdk = createTracingSdk({
@@ -115,10 +119,11 @@ export function setup(otlpUrl = `${baseUrl}/v1/traces`) {
       },
       getRunOutcome: (binding) => outcomes.get(binding.traceId),
     },
-    registration: createHttpRunRegistration({
+    registration: delivery.registration ?? createHttpRunRegistration({
       url: `${baseUrl}/internal/v1/observability/runs`,
       getHeaders: async () => ({ Authorization: 'Bearer register-token' }),
     }),
+    maxBufferedSpans: delivery.maxBufferedSpans,
   });
   return {
     sdk,
@@ -138,6 +143,7 @@ export interface Node {
   parent_span_id: string | null;
   agent_id: string;
   kind: string;
+  status: number;
 }
 
 interface Trace {

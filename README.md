@@ -49,6 +49,8 @@ try {
 
 `go run ./cmd/dubhe-tracing` 读取 `DUBHE_MYSQL_DSN`、`DUBHE_LISTEN` 和 `DUBHE_TRACING_AUTH`。鉴权配置提供 `workloads`、`registrars` 和 `readers` 三类服务端身份。各身份绑定 `scope`，上报和登记身份还绑定 `producer_id`，读身份包含 `agent_ids`。验收脚本包含本地静态 Token 配置示例。
 
+部署时通过 `DUBHE_MYSQL_READ_DSN` 为查询配置同库的独立连接池，使用仅对 Tracing 查询表有 `SELECT` 权限的 MySQL 账号。仅使用 `DUBHE_MYSQL_DSN` 时，读写共享连接池。
+
 - `POST /internal/v1/observability/runs` 接受可信入口使用独立内部凭据提交的轮次绑定。
 - `POST /v1/traces` 接受以工作负载身份鉴权的 OTLP/HTTP 二进制 Protobuf 批次，支持 gzip。
 - `GET /v1/observability/traces/{trace_id}` 返回 Trace 及其节点。

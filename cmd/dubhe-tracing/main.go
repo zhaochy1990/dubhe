@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-sql-driver/mysql"
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/zhaochy1990/dubhe/internal/tracing"
 	tracingschema "github.com/zhaochy1990/dubhe/src/dubhe"
 )
@@ -24,22 +24,33 @@ func main() {
 	}
 }
 
+func openMySQL(dsn, name string) (*sql.DB, error) {
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("%s is invalid", name)
+	}
+	return db, nil
+}
+
 func run() error {
 	dsn := os.Getenv("DUBHE_MYSQL_DSN")
 	if dsn == "" {
 		return errors.New("DUBHE_MYSQL_DSN is required")
 	}
-	config, err := mysql.ParseDSN(dsn)
+	db, err := openMySQL(dsn, "DUBHE_MYSQL_DSN")
 	if err != nil {
-		return errors.New("DUBHE_MYSQL_DSN is invalid")
+		return err
 	}
-	connector, err := mysql.NewConnector(config)
-	if err != nil {
-		return errors.New("DUBHE_MYSQL_DSN is invalid")
-	}
-	db := sql.OpenDB(connector)
 	defer db.Close()
-	handler, err := tracing.NewHandler(db, os.Getenv("DUBHE_TRACING_AUTH"))
+	readDB := db
+	if readDSN := os.Getenv("DUBHE_MYSQL_READ_DSN"); readDSN != "" {
+		readDB, err = openMySQL(readDSN, "DUBHE_MYSQL_READ_DSN")
+		if err != nil {
+			return err
+		}
+		defer readDB.Close()
+	}
+	handler, err := tracing.NewHandler(db, readDB, os.Getenv("DUBHE_TRACING_AUTH"))
 	if err != nil {
 		return err
 	}

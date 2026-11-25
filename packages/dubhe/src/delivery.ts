@@ -9,10 +9,11 @@ export interface FlushResult {
   outcome: 'drained' | 'timed_out';
 }
 
-type RegistrationState = 'pending' | 'registered' | 'rejected';
+type RegistrationState = 'pending' | 'registered' | 'rejected' | 'overflow';
 interface DeliveryTurn {
   readonly deadline: number;
   state: RegistrationState;
+  registration?: AbortController;
 }
 interface BufferedSpan {
   readonly span: ReadableSpan;
@@ -74,11 +75,19 @@ export class SpanDelivery implements SpanProcessor {
   }
 
   add(run: VerifiedRun): void {
-    const turn: DeliveryTurn = { deadline: Date.parse(run.acceptUntil), state: 'pending' };
+    const turn: DeliveryTurn = {
+      deadline: Date.parse(run.acceptUntil),
+      state: this.#registrationCount < this.limit ? 'pending' : 'overflow',
+    };
     this.#active.set(run.traceId, turn);
+    if (turn.state === 'overflow') return;
+    const registration = new AbortController();
+    turn.registration = registration;
     this.#registrationCount++;
     // Registration is independent of callback execution and always uses the original binding.
-    void this.#register(run, turn).finally(() => {
+    const signal = AbortSignal.any([this.#stop.signal, registration.signal]);
+    void this.#register(run, turn, signal).finally(() => {
+      turn.registration = undefined;
       this.#registrationCount--;
       this.#schedule();
       this.#notifyDrained();
@@ -86,7 +95,11 @@ export class SpanDelivery implements SpanProcessor {
   }
 
   close(traceId: string): void {
+    const turn = this.#active.get(traceId);
     this.#active.delete(traceId);
+    if (turn?.registration && !this.#buffer.some((entry) => entry.turn === turn)) {
+      turn.registration.abort();
+    }
   }
 
   onStart(): void {}
@@ -96,7 +109,7 @@ export class SpanDelivery implements SpanProcessor {
     if (!turn) return;
     if (!this.#accepting || turn.state === 'rejected' || Date.now() >= turn.deadline) {
       droppedSpans.add(1, { reason: this.#accepting ? 'registration_or_expiry' : 'shutdown' });
-    } else if (this.#buffer.length >= this.limit) {
+    } else if (turn.state === 'overflow' || this.#buffer.length >= this.limit) {
       droppedSpans.add(1, { reason: 'buffer_full' });
     } else {
       this.#buffer.push({ span, turn });
@@ -104,9 +117,8 @@ export class SpanDelivery implements SpanProcessor {
     }
   }
 
-  async #register(run: VerifiedRun, turn: DeliveryTurn): Promise<void> {
+  async #register(run: VerifiedRun, turn: DeliveryTurn, signal: AbortSignal): Promise<void> {
     let backoff = this.retryDelayMs;
-    const signal = this.#stop.signal;
     while (!signal.aborted) {
       const remaining = turn.deadline - Date.now();
       if (remaining <= 0) break;

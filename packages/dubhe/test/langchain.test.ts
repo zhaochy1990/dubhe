@@ -5,6 +5,7 @@ import { buffer } from 'node:stream/consumers';
 import { test } from 'node:test';
 import { AIMessageChunk, type BaseMessage } from '@langchain/core/messages';
 import { ChatGenerationChunk } from '@langchain/core/outputs';
+import { SpanStatusCode } from '@opentelemetry/api';
 import { createAgent } from 'langchain';
 import { assertTrace, baseUrl, inputs, newTurn, readTrace, setup, TestModel } from './support.js';
 
@@ -51,10 +52,15 @@ async function firstText(iterator: AsyncIterator<[BaseMessage, unknown]>): Promi
   return first.value[0].content as string;
 }
 
-for (const outcome of ['completed', 'failed'] as const) {
-  test(`native stream emits before model completion and persists one ${outcome} root`, live, async (t) => {
-    const providerError = new Error('Provider failed after the first chunk');
-    const model = controlledModel(outcome === 'failed' ? providerError : undefined);
+for (const [result, providerError] of [
+  ['success', undefined],
+  ['provider failure', new Error('Provider failed after the first chunk')],
+  ['provider timeout', new DOMException('upstream timeout', 'AbortError')],
+  ['provider AbortError with a default message', AbortSignal.abort().reason as DOMException],
+  ['provider Abort error', new Error('Abort')],
+] as const) {
+  test(`native stream emits before model completion and records ${result}`, live, async (t) => {
+    const model = controlledModel(providerError);
     const { sdk, tracing, binding } = setup();
     t.after(() => sdk.shutdown({ timeoutMs: 5_000 }));
     const turn = newTurn();
@@ -66,7 +72,7 @@ for (const outcome of ['completed', 'failed'] as const) {
       assert.equal(await firstText(iterator), 'Your balance ');
       assert.equal(model.isComplete(), false);
       model.release();
-      if (outcome === 'failed') {
+      if (providerError) {
         await assert.rejects(iterator.next(), (error) => error === providerError);
       } else {
         assert.equal(await firstText(iterator), 'is 42.');
@@ -81,27 +87,29 @@ for (const outcome of ['completed', 'failed'] as const) {
 
     await model.closed;
     assert.deepEqual(await sdk.flush({ timeoutMs: 5_000 }), { outcome: 'drained' });
-    await assertTrace(binding(turn), outcome);
+    const trace = await assertTrace(binding(turn), providerError ? 'failed' : 'completed');
+    const status = providerError ? SpanStatusCode.ERROR : SpanStatusCode.OK;
+    assert.deepEqual(trace.nodes.map((node) => node.status), [status, status]);
   });
 }
 
-for (const confirmed of [true, false]) {
-  test(`closing the native stream ${confirmed ? 'records confirmed cancellation' : 'leaves an unknown outcome'}`, live, async (t) => {
+for (const [close, confirmed] of [['abort', true], ['abort', false], ['return', true], ['return', false]] as const) {
+  test(`native stream ${close} ${confirmed ? 'records confirmed cancellation' : 'leaves an unknown outcome'}`, live, async (t) => {
     const model = controlledModel();
     const { sdk, tracing, binding, outcomes } = setup();
     t.after(() => sdk.shutdown({ timeoutMs: 5_000 }));
     const turn = newTurn();
     const agent = createAgent({ model: model.model, tools: [] });
-    const abort = new AbortController();
-    const config = await tracing.prepareConfig(turn, { signal: abort.signal });
+    const abort = close === 'abort' ? new AbortController() : undefined;
+    const config = await tracing.prepareConfig(turn, abort && { signal: abort.signal });
     try {
       const chunks = await agent.stream(inputs, { ...config, streamMode: 'messages' });
-      for await (const [message] of chunks) {
-        assert.equal(message.content, 'Your balance ');
-        assert.equal(model.isComplete(), false);
-        abort.abort();
-        break;
-      }
+      const iterator = chunks[Symbol.asyncIterator]();
+      assert.equal(await firstText(iterator), 'Your balance ');
+      assert.equal(model.isComplete(), false);
+      abort?.abort();
+      assert.ok(iterator.return);
+      await iterator.return();
       await model.closed;
       if (confirmed) outcomes.set(binding(turn).traceId, 'cancelled');
     } finally {
@@ -112,7 +120,8 @@ for (const confirmed of [true, false]) {
 
     assert.equal(model.isComplete(), false);
     assert.deepEqual(await sdk.flush({ timeoutMs: 5_000 }), { outcome: 'drained' });
-    await assertTrace(binding(turn), confirmed ? 'cancelled' : null);
+    const trace = await assertTrace(binding(turn), confirmed ? 'cancelled' : null);
+    assert.deepEqual(trace.nodes.map((node) => node.status), [SpanStatusCode.UNSET, SpanStatusCode.UNSET]);
   });
 }
 
