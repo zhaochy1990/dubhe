@@ -29,6 +29,13 @@ const sessionData = [
 ];
 const sessionAges = [0, 2, 9];
 const demoMinuteOfDay = 11 * 60;
+
+function sessionOffset(row, index, days) {
+  const age = sessionAges[index];
+  if (days !== 1) return age;
+  const [hour, minute] = row[3].split(" ").at(-1).split(":").map(Number);
+  return Math.floor((age * 1440 + demoMinuteOfDay - hour * 60 - minute) / 60);
+}
 function renderSessions(state = {}) {
   document.getElementById("crumb").textContent = "Agent 观测";
   let p = document.getElementById("page");
@@ -43,24 +50,19 @@ function renderSessions(state = {}) {
       );
     const range = p.querySelector("#traceTime");
     const days = [7, 1, 30][range.selectedIndex];
-    let filtered = sessionData.filter(
+    const bucketCount = days === 1 ? 24 : days;
+    const filtered = sessionData.filter(
       (r, i) =>
-        sessionAges[i] < days &&
+        sessionOffset(r, i, days) >= 0 &&
+        sessionOffset(r, i, days) < bucketCount &&
         r.join(" ").toLowerCase().includes(q) &&
         (!agents.length || agents.includes(r[1])) &&
         (!results.length || results.includes(r[5])),
     );
-    const bucketCount = days === 1 ? 24 : days;
     const counts = Array.from({ length: bucketCount }, () => 0);
     for (const row of filtered) {
-      const age = sessionAges[sessionData.indexOf(row)];
-      const [hour, minute] = row[3].split(" ").at(-1).split(":").map(Number);
-      const ageHours = Math.floor(
-        (age * 1440 + demoMinuteOfDay - hour * 60 - minute) / 60,
-      );
-      const offset = days === 1 ? ageHours : age;
-      if (offset >= 0 && offset < bucketCount)
-        counts[bucketCount - 1 - offset]++;
+      const offset = sessionOffset(row, sessionData.indexOf(row), days);
+      counts[bucketCount - 1 - offset]++;
     }
     p.querySelector("#sessionBars").innerHTML = counts
       .map((count) => `<i style="height:${count ? count * 36 : 0}px"></i>`)
