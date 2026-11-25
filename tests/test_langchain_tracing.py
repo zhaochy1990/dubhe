@@ -16,7 +16,13 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from dubhe import TraceScope, TracingOptions, VerifiedTurn, create_tracing_sdk
+from dubhe import (
+    TraceScope,
+    TracingOptions,
+    TransientRegistrationError,
+    VerifiedTurn,
+    create_tracing_sdk,
+)
 from dubhe.langchain import LangChainTracing
 from dubhe.service import BearerAuth, TraceReader, Workload, create_app
 from dubhe.storage import TraceStore
@@ -34,6 +40,21 @@ class ExistingCallback(AsyncCallbackHandler):
 
     async def on_chat_model_start(self, serialized, messages, *, metadata, **kwargs):
         self.invocations.append(metadata["integration_marker"])
+
+
+class FailingChatModel(FakeMessagesListChatModel):
+    error: BaseException
+
+    async def _agenerate(self, *args, **kwargs):
+        raise self.error
+
+
+class BlockingChatModel(FakeMessagesListChatModel):
+    started: asyncio.Event
+
+    async def _agenerate(self, *args, **kwargs):
+        self.started.set()
+        await asyncio.Future()
 
 
 @pytest.fixture(scope="module")
@@ -85,10 +106,11 @@ def tracing_service():
             worker.join(timeout=5)
 
 
-async def invoke_turn(tracing_service):
+async def invoke_turn(tracing_service, *, model=None, invoke=None):
     scope, store, endpoint = tracing_service
     binding_by_turn = {}
-    allow_registration = asyncio.Event()
+    registration_attempts = []
+    allow_commit = asyncio.Event()
 
     async def prepare_run(run):
         key = (run.turn.scope, run.turn.session_id, run.turn.turn_id)
@@ -98,7 +120,10 @@ async def invoke_turn(tracing_service):
         return True
 
     async def register_run(run):
-        await allow_registration.wait()
+        registration_attempts.append(run)
+        if len(registration_attempts) == 1:
+            raise TransientRegistrationError("Registration is temporarily unavailable")
+        await allow_commit.wait()
         await store.register_run(run)
 
     sdk = create_tracing_sdk(
@@ -112,9 +137,10 @@ async def invoke_turn(tracing_service):
         )
     )
     tracer = LangChainTracing(sdk)
-    model = FakeMessagesListChatModel(
-        responses=[AIMessage(content="Your balance is 42.")]
-    )
+    if model is None:
+        model = FakeMessagesListChatModel(
+            responses=[AIMessage(content="Your balance is 42.")]
+        )
 
     agent = create_agent(model, tools=[], checkpointer=InMemorySaver())
     callback = ExistingCallback()
@@ -136,25 +162,35 @@ async def invoke_turn(tracing_service):
             tracer.prepare_config(turn, config=prior_config), timeout=5
         )
         try:
-            result = await agent.ainvoke(
+            invocation = agent.ainvoke(
                 {"messages": [{"role": "user", "content": "What is my balance?"}]},
                 config=config,
             )
+            result = await invocation if invoke is None else await invoke(invocation)
         finally:
             tracer.finish(config)
             tracer.finish(config)
         checkpoint = await agent.aget_state({"configurable": {"thread_id": thread_id}})
-        allow_registration.set()
+        binding = binding_by_turn[scope, turn.session_id, turn.turn_id]
+        async with httpx.AsyncClient(base_url=endpoint) as client:
+            before_commit = await client.get(
+                f"/v1/observability/traces/{binding.trace_id}",
+                params=scope.query_params(),
+                headers={"Authorization": "Bearer reader-token"},
+            )
+        assert before_commit.status_code == 404, before_commit.text
+        allow_commit.set()
         assert await sdk.flush(timeout_ms=5_000)
+        assert registration_attempts == [binding, binding]
     finally:
-        allow_registration.set()
+        allow_commit.set()
         await sdk.shutdown(timeout_ms=5_000)
     return (
         result,
         checkpoint,
         callback,
         prior_config,
-        binding_by_turn[scope, turn.session_id, turn.turn_id],
+        binding,
     )
 
 
@@ -163,7 +199,18 @@ def traced_turn(tracing_service):
     return asyncio.run(invoke_turn(tracing_service))
 
 
-def test_native_ainvoke_preserves_callbacks_and_checkpoint_and_persists_the_trace(
+def read_trace(tracing_service, binding):
+    scope, _, endpoint = tracing_service
+    response = httpx.get(
+        f"{endpoint}/v1/observability/traces/{binding.trace_id}",
+        params=scope.query_params(),
+        headers={"Authorization": "Bearer reader-token"},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_native_ainvoke_preserves_callbacks_checkpoint_and_trace_when_registration_retries(
     tracing_service, traced_turn
 ):
     scope, _, endpoint = tracing_service
@@ -175,13 +222,7 @@ def test_native_ainvoke_preserves_callbacks_and_checkpoint_and_persists_the_trac
     assert checkpoint.values["messages"][-1].content == "Your balance is 42."
     assert len(checkpoint.values["messages"]) == 2
 
-    response = httpx.get(
-        f"{endpoint}/v1/observability/traces/{binding.trace_id}",
-        params=scope.query_params(),
-        headers={"Authorization": "Bearer reader-token"},
-    )
-    assert response.status_code == 200, response.text
-    trace = response.json()
+    trace = read_trace(tracing_service, binding)
     assert trace["trace_id"] == binding.trace_id
     assert trace["session_id"] == binding.turn.session_id
     assert trace["turn_id"] == "turn-1"
@@ -202,6 +243,53 @@ def test_native_ainvoke_preserves_callbacks_and_checkpoint_and_persists_the_trac
     )
     assert detail.status_code == 200, detail.text
     assert detail.json()["parent_span_id"] == binding.root_span_id
+
+
+def test_native_ainvoke_preserves_original_exception_and_records_failed_run(
+    tracing_service,
+):
+    error = ValueError("Model call failed")
+    model = FailingChatModel(responses=[], error=error)
+
+    async def expect_model_failure(invocation):
+        with pytest.raises(ValueError) as raised:
+            await invocation
+        assert raised.value is error
+
+    _, _, _, _, binding = asyncio.run(
+        invoke_turn(tracing_service, model=model, invoke=expect_model_failure)
+    )
+
+    trace = read_trace(tracing_service, binding)
+    assert trace["run_state"] == "failed"
+    roots = [node for node in trace["nodes"] if node["kind"] == "run"]
+    assert [root["span_id"] for root in roots] == [binding.root_span_id]
+    assert roots[0]["metadata"] == {"run_outcome": "failed"}
+    assert roots[0]["status"] == 2  # OTLP error status.
+
+
+def test_native_ainvoke_leaves_unconfirmed_cancellation_outcome_unset(tracing_service):
+    model = BlockingChatModel(responses=[], started=asyncio.Event())
+
+    async def cancel_invocation(invocation):
+        task = asyncio.create_task(invocation)
+        try:
+            await asyncio.wait_for(model.started.wait(), timeout=5)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    _, _, _, _, binding = asyncio.run(
+        invoke_turn(tracing_service, model=model, invoke=cancel_invocation)
+    )
+
+    trace = read_trace(tracing_service, binding)
+    assert trace["run_state"] is None
+    roots = [node for node in trace["nodes"] if node["kind"] == "run"]
+    assert [root["span_id"] for root in roots] == [binding.root_span_id]
+    assert roots[0]["metadata"] == {}
+    assert roots[0]["status"] == 0  # OpenTelemetry unset status.
 
 
 @pytest.mark.parametrize("field", OTHER_SCOPE_IDS)

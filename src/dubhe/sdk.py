@@ -10,9 +10,20 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON
-from opentelemetry.trace import Span, format_span_id, format_trace_id
+from opentelemetry.trace import (
+    Span,
+    format_span_id,
+    format_trace_id,
+    set_span_in_context,
+)
 
-from .domain import TraceScope, VerifiedRun, VerifiedTurn, encode_id
+from .domain import (
+    TraceScope,
+    TransientRegistrationError,
+    VerifiedRun,
+    VerifiedTurn,
+    encode_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -126,20 +137,26 @@ class TracingSdk:
         self._provider = TracerProvider(sampler=ALWAYS_ON, shutdown_on_exit=False)
         self._provider.add_span_processor(self._gate)
         self._tracer = self._provider.get_tracer("dubhe")
-        self._registration_tasks: set[asyncio.Task] = set()
+        self._registration_tasks: set[asyncio.Task[None]] = set()
         self._closed = False
         self._shutdown_task: asyncio.Task | None = None
+
+    def _start_span(self, kind: str, agent_id: str, context: Context) -> Span:
+        return self._tracer.start_span(
+            kind,
+            context=context,
+            attributes={"dubhe.span.kind": kind, "dubhe.agent.id": agent_id},
+        )
+
+    def _start_model_span(self, parent: Span, agent_id: str) -> Span:
+        return self._start_span("llm", agent_id, set_span_in_context(parent))
 
     async def _prepare_turn(self, turn: VerifiedTurn) -> Span:
         if self._closed:
             raise RuntimeError("Tracing SDK is shut down")
         if turn.scope != self._options.scope:
             raise ValueError("Verified turn is outside the SDK scope")
-        root = self._tracer.start_span(
-            "run",
-            context=Context(),
-            attributes={"dubhe.span.kind": "run", "dubhe.agent.id": turn.root_agent_id},
-        )
+        root = self._start_span("run", turn.root_agent_id, Context())
         context = root.get_span_context()
         registered_at = time.time_ns()
         run = VerifiedRun(
@@ -166,13 +183,28 @@ class TracingSdk:
 
     async def _register(self, trace_id: int, run: VerifiedRun) -> None:
         accepted = False
+        remaining = (run.accept_until_ns - time.time_ns()) / 1_000_000_000
+        deadline = asyncio.timeout(remaining)
+        delay = 0.1
         try:
-            await self._options.register_run(run)
-            accepted = True
+            async with deadline:
+                while time.time_ns() < run.accept_until_ns:
+                    try:
+                        await self._options.register_run(run)
+                    except TransientRegistrationError:
+                        await asyncio.sleep(delay)
+                        delay = min(delay * 2, 5)
+                    else:
+                        accepted = time.time_ns() < run.accept_until_ns
+                        break
         except Exception:  # noqa: BLE001 - Host adapters may raise transport-specific errors.
-            logger.warning("Trusted tracing registration failed")
+            if not deadline.expired():
+                logger.warning("Trusted tracing registration failed")
+                return
         finally:
             self._gate.resolve(trace_id, accepted)
+        if not accepted:
+            logger.warning("Trusted tracing registration expired")
 
     def _finish_turn(self, root: Span) -> None:
         self._gate.close(root.get_span_context().trace_id)
@@ -212,8 +244,10 @@ class TracingSdk:
 
     async def _shutdown(self, timeout_ms: int) -> bool:
         drained = await self.flush(timeout_ms=timeout_ms)
-        for task in tuple(self._registration_tasks):
+        registrations = tuple(self._registration_tasks)
+        for task in registrations:
             task.cancel()
+        await asyncio.gather(*registrations, return_exceptions=True)
         await asyncio.to_thread(self._provider.shutdown)
         return drained
 

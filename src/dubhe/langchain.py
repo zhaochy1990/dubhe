@@ -1,9 +1,10 @@
+from asyncio import CancelledError
 from threading import Lock
 from uuid import UUID
 
 from langchain_core.callbacks import AsyncCallbackHandler, BaseCallbackManager
 from langchain_core.runnables import RunnableConfig
-from opentelemetry.trace import Span, StatusCode, set_span_in_context
+from opentelemetry.trace import Span, StatusCode
 
 from .domain import VerifiedTurn
 from .sdk import TracingSdk
@@ -74,32 +75,31 @@ class _TurnCallback(AsyncCallbackHandler):
                 if parent is None:
                     return
             if model:
-                parent = self._sdk._tracer.start_span(
-                    "llm",
-                    context=set_span_in_context(parent),
-                    attributes={
-                        "dubhe.span.kind": "llm",
-                        "dubhe.agent.id": self._agent_id,
-                    },
-                )
+                parent = self._sdk._start_model_span(parent, self._agent_id)
                 self._models[run_id] = parent
             self._parents[run_id] = parent
 
-    def _end(self, run_id: UUID, *, failed: bool) -> None:
+    def _end(self, run_id: UUID, *, error: BaseException | None = None) -> None:
         with self._lock:
             if self._finished:
                 return
             self._parents.pop(run_id, None)
-            status = StatusCode.ERROR if failed else StatusCode.OK
+            status = StatusCode.OK
+            if isinstance(error, CancelledError):
+                status = StatusCode.UNSET
+            elif error is not None:
+                status = StatusCode.ERROR
             model = self._models.pop(run_id, None)
             if model is not None:
                 model.set_status(status)
                 model.end()
             if run_id == self._root_run_id and not self._root_ended:
-                self._root.set_status(status)
-                self._root.set_attribute(
-                    "dubhe.run.outcome", "failed" if failed else "completed"
-                )
+                if status is not StatusCode.UNSET:
+                    self._root.set_status(status)
+                    self._root.set_attribute(
+                        "dubhe.run.outcome",
+                        "failed" if status is StatusCode.ERROR else "completed",
+                    )
                 self._root.end()
                 self._root_ended = True
 
@@ -127,10 +127,10 @@ class _TurnCallback(AsyncCallbackHandler):
         self._start(run_id, parent_run_id)
 
     async def on_chain_end(self, outputs, *, run_id, **kwargs):
-        self._end(run_id, failed=False)
+        self._end(run_id)
 
     async def on_chain_error(self, error, *, run_id, **kwargs):
-        self._end(run_id, failed=True)
+        self._end(run_id, error=error)
 
     async def on_chat_model_start(
         self, serialized, messages, *, run_id, parent_run_id=None, **kwargs
@@ -143,7 +143,7 @@ class _TurnCallback(AsyncCallbackHandler):
         self._start(run_id, parent_run_id, model=True)
 
     async def on_llm_end(self, response, *, run_id, **kwargs):
-        self._end(run_id, failed=False)
+        self._end(run_id)
 
     async def on_llm_error(self, error, *, run_id, **kwargs):
-        self._end(run_id, failed=True)
+        self._end(run_id, error=error)

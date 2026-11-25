@@ -6,9 +6,20 @@ from datetime import UTC, datetime
 from importlib.resources import files
 
 import pymysql
+from pymysql.constants import CR, ER
 from pymysql.cursors import DictCursor
 
-from .domain import TraceScope, VerifiedRun, encode_id
+from .domain import TraceScope, TransientRegistrationError, VerifiedRun, encode_id
+
+_RETRYABLE_REGISTRATION_ERRORS = {
+    CR.CR_CONN_HOST_ERROR,
+    CR.CR_SERVER_GONE_ERROR,
+    CR.CR_SERVER_LOST,
+    ER.CON_COUNT_ERROR,
+    ER.LOCK_DEADLOCK,
+    ER.LOCK_WAIT_TIMEOUT,
+    ER.SERVER_SHUTDOWN,
+}
 
 
 @dataclass(frozen=True)
@@ -108,7 +119,14 @@ class TraceStore:
 
     async def register_run(self, run: VerifiedRun) -> None:
         """Register the host's verified binding using a private integration boundary."""
-        await asyncio.to_thread(self._register_run, run)
+        try:
+            await asyncio.to_thread(self._register_run, run)
+        except pymysql.OperationalError as error:
+            if error.args and error.args[0] in _RETRYABLE_REGISTRATION_ERRORS:
+                raise TransientRegistrationError(
+                    "MySQL tracing registration is temporarily unavailable"
+                ) from error
+            raise
 
     def _register_run(self, run: VerifiedRun) -> None:
         scope = _scope_key(run.turn.scope)

@@ -2,6 +2,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 
 
+class TransientRegistrationError(RuntimeError):
+    """The trusted registration may succeed when retried with the same binding."""
+
+
 def encode_id(value: str) -> bytes:
     if not isinstance(value, str) or not value or "\x00" in value:
         raise ValueError("An opaque ID must be a non-empty string without null bytes")
