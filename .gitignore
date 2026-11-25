@@ -32,3 +32,10 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Python environment and build artifacts
+__pycache__/
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
