@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dubhe"
+version = "0.1.0"
+description = "Agent tracing for Python applications"
+requires-python = ">=3.11"
+dependencies = [
+    "opentelemetry-exporter-otlp-proto-http>=1.39,<2",
+    "opentelemetry-sdk>=1.39,<2",
+]
+
+[project.optional-dependencies]
+langchain = ["langchain-core>=1,<2"]
+server = ["googleapis-common-protos>=1.70,<2", "pymysql[rsa]>=1.1,<2", "starlette>=0.50,<2", "uvicorn>=0.38,<1"]
+
+[dependency-groups]
+dev = ["httpx>=0.28,<1", "langchain>=1,<2", "pytest>=8,<10"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dubhe"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
