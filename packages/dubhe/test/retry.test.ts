@@ -5,9 +5,7 @@ import { gunzipSync } from 'node:zlib';
 import { createAgent } from 'langchain';
 import { createConnection, type RowDataPacket } from 'mysql2/promise';
 import protobuf from 'protobufjs';
-import { createHttpRunRegistration, createTracingSdk, type VerifiedRun } from 'dubhe';
-import { LangChainTracing } from 'dubhe/langchain';
-import { answer, baseUrl, inputs, newTurn, readTrace, scope, TestModel } from './support.js';
+import { answer, assertTrace, baseUrl, inputs, newTurn, scope, setup, TestModel } from './support.js';
 
 // Decode only the official OTLP envelope fields needed to compare the wire IDs.
 const requestType = protobuf.parse(`
@@ -65,7 +63,7 @@ test('the SDK resends committed Span IDs when the OTLP acknowledgement is lost',
     }));
   }
 
-  let binding: VerifiedRun | undefined;
+  let traceIdBeforeDisconnect: string | undefined;
   const attempts: SpanIDs[][] = [];
   const proxyErrors: unknown[] = [];
   let committedBeforeDisconnect: SpanIDs[] | undefined;
@@ -93,9 +91,9 @@ test('the SDK resends committed Span IDs when the OTLP acknowledgement is lost',
       assert.equal(received.status, 200);
       assert.equal(acknowledgement.byteLength, 0, 'Go should acknowledge the entire OTLP batch');
       if (isFirstAttempt) {
-        assert.ok(binding);
+        assert.ok(traceIdBeforeDisconnect);
         // Verify the committed rows from a separate connection before dropping the response.
-        committedBeforeDisconnect = await readRows(binding.traceId);
+        committedBeforeDisconnect = await readRows(traceIdBeforeDisconnect);
         request.socket.destroy();
         return;
       }
@@ -114,28 +112,16 @@ test('the SDK resends committed Span IDs when the OTLP acknowledgement is lost',
     });
     const address = proxy.address();
     assert.ok(address && typeof address !== 'string');
-    const sdk = createTracingSdk({
-      scope,
-      producerId: 'agent-worker',
-      otlpTraceEndpoint: `http://127.0.0.1:${address.port}/v1/traces`,
-      getOtlpHeaders: async () => ({ Authorization: 'Bearer workload-token' }),
-      host: {
-        async prepareRun(candidate) {
-          binding = candidate;
-          return { outcome: 'started', binding: candidate };
-        },
-      },
-      registration: createHttpRunRegistration({
-        url: `${baseUrl}/internal/v1/observability/runs`,
-        getHeaders: async () => ({ Authorization: 'Bearer register-token' }),
-      }),
-      retryDelayMs: 20,
-    });
+    const host = setup(`http://127.0.0.1:${address.port}/v1/traces`);
+    const { sdk, tracing } = host;
 
     try {
       const agent = createAgent({ model: new TestModel(), tools: [] });
-      const tracing = new LangChainTracing(sdk);
-      const config = await tracing.prepareConfig(newTurn(), {});
+      const turn = newTurn();
+      const config = await tracing.prepareConfig(turn, {});
+      const binding = host.binding(turn);
+      const { traceId, rootSpanId } = binding;
+      traceIdBeforeDisconnect = traceId;
       try {
         const result = await agent.invoke(inputs, config);
         assert.equal(result.messages.at(-1)?.content, answer);
@@ -151,8 +137,6 @@ test('the SDK resends committed Span IDs when the OTLP acknowledgement is lost',
       assert.deepEqual(sorted(retry), sorted(initial));
       assert.deepEqual(committedBeforeDisconnect, sorted(initial));
 
-      assert.ok(binding);
-      const { traceId, rootSpanId } = binding;
       const emitted = [...initial, ...later.flat()];
       assert.equal(emitted.length, 2);
       const root = emitted.find((span) => span.spanId === rootSpanId);
@@ -165,12 +149,9 @@ test('the SDK resends committed Span IDs when the OTLP acknowledgement is lost',
       const expected = sorted([root, child]);
       assert.deepEqual(await readRows(traceId), expected);
 
-      const traceResponse = await readTrace(traceId);
-      assert.equal(traceResponse.status, 200);
-      const trace = await traceResponse.json();
-      assert.equal(trace.trace_id, traceId);
-      const queried = trace.nodes.map((node: { trace_id: string; span_id: string; parent_span_id: string | null }) => ({
-        traceId: node.trace_id, spanId: node.span_id, parentSpanId: node.parent_span_id ?? '',
+      const trace = await assertTrace(binding, 'completed');
+      const queried = trace.nodes.map((node) => ({
+        traceId: trace.trace_id, spanId: node.span_id, parentSpanId: node.parent_span_id ?? '',
       }));
       assert.deepEqual(sorted(queried), expected);
     } finally {
