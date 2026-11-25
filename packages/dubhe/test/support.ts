@@ -155,4 +155,3 @@ export async function assertTrace(binding: VerifiedRun, outcome: RunOutcome | nu
   assert.equal(model?.agent_id, binding.rootAgentId);
   return trace;
 }
-
