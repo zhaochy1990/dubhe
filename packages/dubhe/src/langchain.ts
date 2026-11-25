@@ -16,12 +16,12 @@ export class LangChainTracing {
     turn: VerifiedTurn,
     existingConfig?: Config,
   ): Promise<PreparedConfig<Config>> {
+    const existing = existingConfig?.callbacks;
+    const callbacks = !existing || Array.isArray(existing) ? [...(existing ?? [])] : existing.copy();
     const preparedTurn = await this.sdk[prepareTurn](turn);
     const handler = new TurnCallback(preparedTurn, existingConfig?.signal);
-    const existing = existingConfig?.callbacks;
-    const callbacks = !existing || Array.isArray(existing)
-      ? [...(existing ?? []), handler]
-      : existing.copy([handler], true);
+    if (Array.isArray(callbacks)) callbacks.push(handler);
+    else callbacks.addHandler(handler, true);
     this.#handlers.set(callbacks, handler);
     return { ...existingConfig, callbacks } as PreparedConfig<Config>;
   }

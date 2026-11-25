@@ -1,5 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { randomUUID } from 'node:crypto';
+import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { AIMessage, type BaseMessage } from '@langchain/core/messages';
 import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
@@ -78,9 +79,16 @@ export class TestModel extends BaseChatModel {
   async *_streamResponseChunks(
     messages: BaseMessage[],
     options: this['ParsedCallOptions'],
+    runManager?: CallbackManagerForLLMRun,
   ): AsyncGenerator<ChatGenerationChunk> {
-    if (this.fixture.stream) yield* this.fixture.stream(options);
-    else yield* super._streamResponseChunks(messages, options);
+    if (!this.fixture.stream) {
+      yield* super._streamResponseChunks(messages, options, runManager);
+      return;
+    }
+    for await (const chunk of this.fixture.stream(options)) {
+      await runManager?.handleLLMNewToken(chunk.text, undefined, undefined, undefined, undefined, { chunk });
+      yield chunk;
+    }
   }
 }
 
@@ -155,4 +163,3 @@ export async function assertTrace(binding: VerifiedRun, outcome: RunOutcome | nu
   assert.equal(model?.agent_id, binding.rootAgentId);
   return trace;
 }
-

@@ -1,5 +1,7 @@
 import { metrics } from '@opentelemetry/api';
+import { ExportResultCode, TimeoutError, type ExportResult } from '@opentelemetry/core';
 import type { ReadableSpan, SpanExporter, SpanProcessor } from '@opentelemetry/sdk-trace';
+import { addAbortListener } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { TransientRegistrationError, type RunRegistration, type VerifiedRun } from './domain.js';
 
@@ -33,7 +35,19 @@ function isRetryableExport(error?: Error): boolean {
   const code = (error as (Error & { code?: number | string }) | undefined)?.code;
   if (typeof code === 'number') return [429, 502, 503, 504].includes(code);
   if (typeof code === 'string') return retryableNetworkErrors.has(code);
-  return error?.message === 'Request timed out' || error?.message === 'Export failed with retryable status';
+  return error instanceof TimeoutError || error?.message === 'Request timed out' ||
+    error?.message === 'Export failed with retryable status';
+}
+
+async function registerBeforeAbort(registration: RunRegistration, run: VerifiedRun, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  const aborted = Promise.withResolvers<never>();
+  const listener = addAbortListener(signal, () => aborted.reject(signal.reason));
+  try {
+    await Promise.race([registration.register(run, signal), aborted.promise]);
+  } finally {
+    listener[Symbol.dispose]();
+  }
 }
 
 /** Spans share one bounded buffer from end through registration, delivery and retry. */
@@ -86,19 +100,21 @@ export class SpanDelivery implements SpanProcessor {
       droppedSpans.add(1, { reason: 'buffer_full' });
     } else {
       this.#buffer.push({ span, turn });
-      this.#schedule();
+      if (turn.state === 'registered') this.#schedule();
     }
   }
 
   async #register(run: VerifiedRun, turn: DeliveryTurn): Promise<void> {
     let backoff = this.retryDelayMs;
     const signal = this.#stop.signal;
-    while (!signal.aborted && Date.now() < turn.deadline) {
+    while (!signal.aborted) {
+      const remaining = turn.deadline - Date.now();
+      if (remaining <= 0) break;
       const attemptSignal = AbortSignal.any([
-        signal, AbortSignal.timeout(Math.min(registrationAttemptMs, turn.deadline - Date.now())),
+        signal, AbortSignal.timeout(Math.min(registrationAttemptMs, remaining)),
       ]);
       try {
-        await this.registration.register(run, attemptSignal);
+        await registerBeforeAbort(this.registration, run, attemptSignal);
         if (!signal.aborted && Date.now() < turn.deadline) {
           turn.state = 'registered';
           return;
@@ -121,14 +137,11 @@ export class SpanDelivery implements SpanProcessor {
   }
 
   #schedule(): void {
-    if (this.#sending || this.#stop.signal.aborted) return;
+    if (this.#timer || this.#sending || this.#stop.signal.aborted) return;
     this.#prune();
-    const ready = this.#retryBatch ?? this.#buffer.filter((span) => span.turn.state === 'registered');
-    if (!ready.length) return;
+    if (!this.#buffer.some(({ turn }) => turn.state === 'registered')) return;
     const now = Date.now();
-    const expiry = Math.min(...ready.map((span) => span.turn.deadline));
-    const next = this.#retryBatch ? Math.min(this.#retryAt, expiry) : now + 10;
-    clearTimeout(this.#timer);
+    const next = this.#retryBatch?.reduce((time, { turn }) => Math.min(time, turn.deadline), this.#retryAt) ?? now + 10;
     this.#timer = setTimeout(() => {
       this.#timer = undefined;
       void this.#send();
@@ -148,10 +161,10 @@ export class SpanDelivery implements SpanProcessor {
     this.#sending = true;
     let retry = false;
     try {
-      const result = await new Promise<Parameters<Parameters<SpanExporter['export']>[1]>[0]>((resolve) => {
+      const result = await new Promise<ExportResult>((resolve) => {
         this.exporter.export(batch.map((entry) => entry.span), resolve);
       });
-      if (result.code !== 0) {
+      if (result.code !== ExportResultCode.SUCCESS) {
         retry = isRetryableExport(result.error);
         exportErrors.add(1, { reason: retry ? 'retryable' : 'rejected' });
       }
@@ -200,6 +213,10 @@ export class SpanDelivery implements SpanProcessor {
   }
 
   flush(timeoutMs: number): Promise<FlushResult> {
+    if (timeoutMs === 0) {
+      const drained = !this.#registrationCount && !this.#buffer.length && !this.#sending;
+      return Promise.resolve({ outcome: drained ? 'drained' : 'timed_out' });
+    }
     return new Promise((resolve) => {
       const timer = setTimeout(() => complete('timed_out'), timeoutMs);
       const complete = (outcome: FlushResult['outcome']) => {

@@ -10,6 +10,7 @@ export interface VerifiedTurn {
   readonly sessionId: string;
   readonly turnId: string;
   readonly rootAgentId: string;
+  /** RFC 3339 timestamp issued by the trusted host. */
   readonly sessionStartedAt: string;
 }
 

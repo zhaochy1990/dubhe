@@ -1,4 +1,5 @@
 import { ROOT_CONTEXT, trace, type Span } from '@opentelemetry/api';
+import { callWithTimeout } from '@opentelemetry/core';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
 import { AlwaysOnSampler, TracerProvider } from '@opentelemetry/sdk-trace';
 import { SpanDelivery, type FlushResult } from './delivery.js';
@@ -89,7 +90,7 @@ export class TracingSdk {
     validateId(this.#producerId);
     const exporter = new OTLPTraceExporter({
       url: httpUrl(options.otlpTraceEndpoint),
-      headers: () => options.getOtlpHeaders(),
+      headers: () => callWithTimeout(options.getOtlpHeaders(), 3_000),
       timeoutMillis: 3_000,
     });
     this.#delivery = new SpanDelivery(options.registration, exporter, maxBufferedSpans, retryDelayMs);
@@ -113,7 +114,7 @@ export class TracingSdk {
       sessionId: turn.sessionId,
       turnId: turn.turnId,
       rootAgentId: turn.rootAgentId,
-      sessionStartedAt: new Date(sessionStart).toISOString(),
+      sessionStartedAt: turn.sessionStartedAt,
       traceId,
       rootSpanId,
       rootProducerId: this.#producerId,
