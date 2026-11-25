@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Tracing 系统架构</title>
+  <style>
+    :root {
+      --paper: #f4f7f5;
+      --ink: #18293a;
+      --muted: #526a77;
+      --line: #b1c4c0;
+      --accent: #087f70;
+      --accent-paper: #e3f3ee;
+      --sans: "Geist", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: clamp(20px, 4vw, 60px); color: var(--ink); background: var(--paper); font: 16px/1.55 var(--sans); }
+    main { max-width: 1160px; margin: 0 auto; }
+    h1 { margin: 0 0 8px; font: 500 clamp(28px, 4vw, 42px)/1.2 "Instrument Serif", "Songti SC", serif; }
+    p { margin: 0 0 20px; color: var(--muted); }
+    .diagram { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: #fbfdfc; }
+    .diagram:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+    svg { display: block; width: 100%; min-width: 1120px; font-family: var(--sans); }
+    .zone { fill: #f1f6f3; stroke: var(--line); stroke-dasharray: 5 4; }
+    .node rect { fill: #fff; stroke: var(--line); }
+    .node.focus rect { fill: var(--accent-paper); stroke: var(--accent); }
+    .node text { fill: var(--ink); }
+    .node .name { font-size: 17px; font-weight: 650; }
+    .node .detail, .label, .zone-title, .legend { fill: var(--muted); font-size: 13px; }
+    .zone-title { font-weight: 650; }
+    .path { fill: none; stroke: #42605e; stroke-width: 1.4; }
+    .async { stroke-dasharray: 5 4; }
+    a { color: var(--accent); text-underline-offset: 4px; }
+    footer { margin-top: 12px; font-size: 14px; }
+
+    .data-model { margin-top: 42px; }
+    .data-model h2 { margin: 0 0 10px; font-size: 28px; }
+    .data-model > p { max-width: 92ch; }
+    .model-diagram { margin-bottom: 12px; }
+    .er-divider { stroke: var(--line); fill: none; }
+    .er-attribute, .er-key, .er-cardinality { font-family: ui-monospace, "PingFang SC", monospace; }
+    .er-attribute { font-size: 12px; font-weight: 650; }
+    .er-key { font-size: 10px; font-weight: 650; }
+    .er-cardinality { fill: var(--ink); font-size: 12px; font-weight: 650; }
+    .er-node .er-description, .er-meaning { fill: var(--muted); font-size: 12px; }
+    .er-legend { display: flex; flex-wrap: wrap; gap: 6px 24px; font-size: 14px; }
+    .er-note { font-size: 14px; }
+    @media print {
+      body { padding: 0; }
+      .diagram { overflow: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Agent Tracing 系统架构</h1>
+    <p>SDK 上报客户端工具 Span，网关独立记录审计。Tracing 核对 call_id 和追踪上下文，匹配后在调用树中展示同一个工具节点。</p>
+    <p><a href="#data-model">查看 V1 实体关系图</a></p>
+    <div class="diagram" role="region" aria-label="可横向滚动的系统架构图" tabindex="0">
+      <svg viewBox="0 0 1120 528" role="img" aria-labelledby="tracing-architecture-title tracing-architecture-desc" xmlns="http://www.w3.org/2000/svg">
+        <title id="tracing-architecture-title">Agent Tracing 采集、审计与查询</title>
+        <desc id="tracing-architecture-desc">SDK 通过 OTLP 上报工具 Span 的父节点、客户端耗时和响应状态或异常类型，网关返回 call_id 并通过 Outbox 提供策略、确认和执行证据。Tracing 核对 call_id 和追踪上下文后展示同一个工具节点，只有 SDK 时展示客户端记录。</desc>
+        <defs>
+          <marker id="tracing-architecture-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#42605e"/>
+          </marker>
+        </defs>
+
+        <rect class="zone" x="24" y="28" width="224" height="444" rx="8"/>
+        <text class="zone-title" x="44" y="58">平台客户端</text>
+        <rect class="zone" x="288" y="152" width="272" height="236" rx="8"/>
+        <text class="zone-title" x="308" y="176">Tooling Gateway 执行域</text>
+        <rect class="zone" x="600" y="28" width="496" height="444" rx="8"/>
+        <text class="zone-title" x="620" y="58">Tracing</text>
+
+        <g marker-end="url(#tracing-architecture-arrow)">
+          <path class="path" d="M 228 132 H 624"/>
+          <path class="path" d="M 228 160 H 256 Q 264 160 264 168 V 224 Q 264 232 272 232 H 312" marker-start="url(#tracing-architecture-arrow)"/>
+          <path class="path" d="M 420 276 V 300"/>
+          <path class="path" d="M 824 132 H 876"/>
+          <path class="path async" d="M 528 336 H 572 Q 580 336 580 328 V 304 Q 580 296 588 296 H 624"/>
+          <path class="path" d="M 824 296 H 840 Q 848 296 848 288 V 168 Q 848 160 856 160 H 876"/>
+          <path class="path" d="M 228 404 H 876"/>
+          <path class="path" d="M 970 336 V 176"/>
+        </g>
+        <g class="label" text-anchor="middle">
+          <text x="424" y="123">OTLP/HTTP Trace（含工具 Span）</text>
+          <text x="252" y="257">请求传 traceparent</text>
+          <text x="252" y="276">返回 call_id</text>
+          <text x="467" y="293">同事务写入</text>
+          <text x="850" y="123">直写</text>
+          <text x="585" y="360">异步消费</text>
+          <text x="892" y="246">幂等更新</text>
+          <text x="426" y="395">列表、调用树、详情</text>
+          <text x="1022" y="296">查询</text>
+        </g>
+
+        <g class="node">
+          <rect x="44" y="88" width="184" height="108" rx="8"/>
+          <text class="name" x="60" y="117">Agent 应用与 SDK</text>
+          <text class="detail" x="60" y="143">Agent、LLM 和工具 Span</text>
+          <text class="detail" x="60" y="162">父节点、耗时、状态或异常</text>
+          <text class="detail" x="60" y="181">记录网关返回的 call_id</text>
+        </g>
+        <g class="node focus">
+          <rect x="624" y="88" width="200" height="88" rx="8"/>
+          <text class="name" x="640" y="117">OTLP Trace 接入</text>
+          <text class="detail" x="640" y="143">验证身份与 Trace 归属</text>
+          <text class="detail" x="640" y="162">批量写入，事务提交后确认</text>
+        </g>
+        <g class="node">
+          <rect x="312" y="188" width="216" height="88" rx="8"/>
+          <text class="name" x="328" y="217">网关、执行器与确认</text>
+          <text class="detail" x="328" y="243">策略决策、确认、执行回执</text>
+          <text class="detail" x="328" y="262">生成并返回 call_id</text>
+        </g>
+        <g class="node">
+          <rect x="312" y="300" width="216" height="72" rx="8"/>
+          <text class="name" x="328" y="329">网关审计与 Outbox</text>
+          <text class="detail" x="328" y="353">执行侧持久化，事件可重放</text>
+        </g>
+        <g class="node">
+          <rect x="624" y="252" width="200" height="88" rx="8"/>
+          <text class="name" x="640" y="281">审计事件消费者</text>
+          <text class="detail" x="640" y="307">按 call_id 建立工具主节点</text>
+          <text class="detail" x="640" y="326">归并决策、确认和执行状态</text>
+        </g>
+        <g class="node focus">
+          <rect x="876" y="88" width="188" height="88" rx="8"/>
+          <text class="name" x="892" y="117">Tracing MySQL</text>
+          <text class="detail" x="892" y="143">Session / Trace / Span</text>
+          <text class="detail" x="892" y="162">工具节点及审计索引</text>
+        </g>
+        <g class="node">
+          <rect x="44" y="360" width="184" height="88" rx="8"/>
+          <text class="name" x="60" y="389">Agent 观测控制台</text>
+          <text class="detail" x="60" y="415">开发者与安全管理员</text>
+          <text class="detail" x="60" y="434">Session、时间线、调用树</text>
+        </g>
+        <g class="node">
+          <rect x="876" y="336" width="188" height="120" rx="8"/>
+          <text class="name" x="892" y="365">授权查询</text>
+          <text class="detail" x="892" y="386">租户、环境、项目、Agent</text>
+          <text class="detail" x="892" y="404">核对 call_id 与追踪上下文</text>
+          <text class="detail" x="892" y="422">匹配后显示同一工具节点</text>
+          <text class="detail" x="892" y="441">仅有 SDK 时显示其记录</text>
+        </g>
+        <g class="legend">
+          <path class="path" d="M 44 500 H 76"/>
+          <text x="84" y="505">调用或数据库写入</text>
+          <path class="path async" d="M 236 500 H 268"/>
+          <text x="276" y="505">异步审计事件</text>
+        </g>
+      </svg>
+    </div>
+    <section class="data-model" id="data-model" aria-labelledby="data-model-title">
+      <h2 id="data-model-title">实体与主要属性</h2>
+      <p>Session 可包含多个 Trace。Span 记录 LLM 调用与客户端工具观测。ToolCall 保存网关调用的参数和执行状态，并关联人工确认与审计事件。</p>
+      <div class="diagram model-diagram" role="region" aria-label="可横向滚动的 Tracing ER 图" tabindex="0">
+        <svg viewBox="0 0 1120 607" role="img" aria-labelledby="tracing-er-title tracing-er-desc" xmlns="http://www.w3.org/2000/svg">
+          <title id="tracing-er-title">Agent Tracing 实体关系图</title>
+          <desc id="tracing-er-desc">会话关联多条 Trace。Span 以 metadata 记录调用详情。网关 ToolCall 保存执行状态，可记录参数和客户端 Span ID，可有零或一个人工确认单以及多条审计事件。Span 可以有一个父节点和多个子节点。</desc>
+
+          <path class="path er-relationship" d="M 328 116 H 412"/>
+          <text class="er-cardinality" x="344" y="106" text-anchor="middle">1</text>
+          <text class="er-cardinality" x="391" y="106" text-anchor="middle">0..*</text>
+          <text class="er-meaning" x="370" y="140" text-anchor="middle">包含</text>
+          <path class="path er-relationship" d="M 708 116 H 792"/>
+          <text class="er-cardinality" x="724" y="106" text-anchor="middle">1</text>
+          <text class="er-cardinality" x="771" y="106" text-anchor="middle">0..*</text>
+          <text class="er-meaning" x="750" y="140" text-anchor="middle">包含</text>
+          <path class="path er-relationship" d="M 892 40 V 24 Q 892 16 900 16 H 1032 Q 1040 16 1040 24 V 40"/>
+          <text class="er-cardinality" x="865" y="33" text-anchor="middle">0..1 父</text>
+          <text class="er-cardinality" x="1067" y="33" text-anchor="middle">0..* 子</text>
+          <text class="er-meaning" x="966" y="33" text-anchor="middle">父子调用</text>
+          <path class="path er-relationship" d="M 540 200 V 340"/>
+          <text class="er-cardinality" x="551" y="220" text-anchor="middle">1</text>
+          <text class="er-cardinality" x="562" y="328" text-anchor="middle">0..*</text>
+          <text class="er-meaning" x="591" y="286" text-anchor="middle">关联调用</text>
+          <path class="path er-relationship" d="M 688 340 V 296 Q 688 288 696 288 H 936 Q 944 288 944 280 V 250"/>
+          <text class="er-cardinality" x="711" y="324" text-anchor="middle">0..1</text>
+          <text class="er-cardinality" x="966" y="271" text-anchor="middle">0..1</text>
+          <text class="er-meaning" x="816" y="278" text-anchor="middle">匹配客户端观测</text>
+          <path class="path er-relationship" d="M 328 430 H 412"/>
+          <text class="er-cardinality" x="348" y="420" text-anchor="middle">0..*</text>
+          <text class="er-cardinality" x="398" y="420" text-anchor="middle">1</text>
+          <text class="er-meaning" x="370" y="454" text-anchor="middle">记录审计</text>
+          <path class="path er-relationship" d="M 708 430 H 792"/>
+          <text class="er-cardinality" x="724" y="420" text-anchor="middle">1</text>
+          <text class="er-cardinality" x="771" y="420" text-anchor="middle">0..1</text>
+          <text class="er-meaning" x="750" y="454" text-anchor="middle">请求确认</text>
+
+          <g class="node er-node">
+            <rect x="32" y="40" width="296" height="160" rx="8"/>
+            <text class="name" x="48" y="68">Session</text>
+            <path class="er-divider" d="M 32 84 H 328"/>
+            <text class="er-key" x="46" y="107">PK</text>
+            <text class="er-attribute" x="81" y="107">session_id</text>
+            <text class="er-description" x="314" y="107" text-anchor="end">会话标识</text>
+            <text class="er-attribute" x="81" y="132">root_agent_id</text>
+            <text class="er-description" x="314" y="132" text-anchor="end">根 Agent，可为空</text>
+            <text class="er-attribute" x="81" y="157">initiator</text>
+            <text class="er-description" x="314" y="157" text-anchor="end">发起主体</text>
+            <text class="er-attribute" x="81" y="182">started_at</text>
+            <text class="er-description" x="314" y="182" text-anchor="end">会话开始时间</text>
+          </g>
+
+          <g class="node er-node focus">
+            <rect x="412" y="40" width="296" height="160" rx="8"/>
+            <text class="name" x="428" y="68">Trace</text>
+            <path class="er-divider" d="M 412 84 H 708"/>
+            <text class="er-key" x="426" y="107">PK</text>
+            <text class="er-attribute" x="461" y="107">trace_id</text>
+            <text class="er-description" x="694" y="107" text-anchor="end">追踪标识</text>
+            <text class="er-key" x="426" y="132">FK</text>
+            <text class="er-attribute" x="461" y="132">session_id</text>
+            <text class="er-description" x="694" y="132" text-anchor="end">所属会话</text>
+            <text class="er-attribute" x="461" y="157">run_key</text>
+            <text class="er-description" x="694" y="157" text-anchor="end">对话轮次或运行</text>
+            <text class="er-attribute" x="461" y="182">run_state</text>
+            <text class="er-description" x="694" y="182" text-anchor="end">运行状态</text>
+          </g>
+
+          <g class="node er-node">
+            <rect x="792" y="40" width="296" height="210" rx="8"/>
+            <text class="name" x="808" y="68">Span</text>
+            <path class="er-divider" d="M 792 84 H 1088"/>
+            <text class="er-key" x="806" y="107">PK</text>
+            <text class="er-attribute" x="841" y="107">span_id</text>
+            <text class="er-description" x="1074" y="107" text-anchor="end">节点标识</text>
+            <text class="er-key" x="806" y="132">FK</text>
+            <text class="er-attribute" x="841" y="132">trace_id</text>
+            <text class="er-description" x="1074" y="132" text-anchor="end">所属 Trace</text>
+            <text class="er-key" x="806" y="157">FK</text>
+            <text class="er-attribute" x="841" y="157">parent_span_id</text>
+            <text class="er-description" x="1074" y="157" text-anchor="end">同 Trace 父节点，可空</text>
+            <text class="er-attribute" x="841" y="182">kind</text>
+            <text class="er-description" x="1074" y="182" text-anchor="end">节点类型</text>
+            <text class="er-attribute" x="841" y="207">start / end</text>
+            <text class="er-description" x="1074" y="207" text-anchor="end">节点起止时间</text>
+            <text class="er-attribute" x="841" y="232">metadata</text>
+            <text class="er-description" x="1074" y="232" text-anchor="end">按 kind 记录详情（JSON）</text>
+          </g>
+
+          <g class="node er-node">
+            <rect x="32" y="340" width="296" height="185" rx="8"/>
+            <text class="name" x="48" y="368">AuditEvent</text>
+            <path class="er-divider" d="M 32 384 H 328"/>
+            <text class="er-key" x="46" y="407">PK</text>
+            <text class="er-attribute" x="81" y="407">source + event_id</text>
+            <text class="er-description" x="314" y="407" text-anchor="end">审计事件标识</text>
+            <text class="er-key" x="46" y="432">FK</text>
+            <text class="er-attribute" x="81" y="432">call_id</text>
+            <text class="er-description" x="314" y="432" text-anchor="end">关联工具调用</text>
+            <text class="er-attribute" x="81" y="457">source</text>
+            <text class="er-description" x="314" y="457" text-anchor="end">事实源角色与标识</text>
+            <text class="er-attribute" x="81" y="482">event_kind</text>
+            <text class="er-description" x="314" y="482" text-anchor="end">审计事件类型</text>
+            <text class="er-attribute" x="81" y="507">evidence_ref_id</text>
+            <text class="er-description" x="314" y="507" text-anchor="end">原始证据引用</text>
+          </g>
+
+          <g class="node er-node focus">
+            <rect x="412" y="340" width="296" height="235" rx="8"/>
+            <text class="name" x="428" y="368">ToolCall</text>
+            <path class="er-divider" d="M 412 384 H 708"/>
+            <text class="er-key" x="426" y="407">PK</text>
+            <text class="er-attribute" x="461" y="407">call_id</text>
+            <text class="er-description" x="694" y="407" text-anchor="end">网关调用标识</text>
+            <text class="er-key" x="426" y="432">FK</text>
+            <text class="er-attribute" x="461" y="432">trace_id</text>
+            <text class="er-description" x="694" y="432" text-anchor="end">已验证的 Trace</text>
+            <text class="er-attribute" x="461" y="457">tool_id</text>
+            <text class="er-description" x="694" y="457" text-anchor="end">被调用工具</text>
+            <text class="er-attribute" x="461" y="482">initial_decision</text>
+            <text class="er-description" x="694" y="482" text-anchor="end">网关初始决策</text>
+            <text class="er-attribute" x="461" y="507">span_id</text>
+            <text class="er-description" x="694" y="507" text-anchor="end">SDK 工具 Span ID，可空</text>
+            <text class="er-attribute" x="461" y="532">parameters</text>
+            <text class="er-description" x="694" y="532" text-anchor="end">策略判定参数（JSON）</text>
+            <text class="er-attribute" x="461" y="557">execution_state</text>
+            <text class="er-description" x="694" y="557" text-anchor="end">下游执行状态</text>
+          </g>
+
+          <g class="node er-node">
+            <rect x="792" y="340" width="296" height="185" rx="8"/>
+            <text class="name" x="808" y="368">HumanConfirmation</text>
+            <path class="er-divider" d="M 792 384 H 1088"/>
+            <text class="er-key" x="806" y="407">PK</text>
+            <text class="er-attribute" x="841" y="407">confirmation_id</text>
+            <text class="er-description" x="1074" y="407" text-anchor="end">确认单标识</text>
+            <text class="er-key" x="806" y="432">FK</text>
+            <text class="er-attribute" x="841" y="432">call_id</text>
+            <text class="er-description" x="1074" y="432" text-anchor="end">需确认的调用</text>
+            <text class="er-attribute" x="841" y="457">state</text>
+            <text class="er-description" x="1074" y="457" text-anchor="end">确认状态</text>
+            <text class="er-attribute" x="841" y="482">actor_id</text>
+            <text class="er-description" x="1074" y="482" text-anchor="end">确认人</text>
+            <text class="er-attribute" x="841" y="507">deadline_at</text>
+            <text class="er-description" x="1074" y="507" text-anchor="end">确认截止时间</text>
+          </g>
+
+        </svg>
+      </div>
+      <p class="er-legend"><span><b>PK</b> 标识键 · <b>FK</b> 关联键</span><span><b>1</b> 恰好一个 · <b>0..1</b> 零或一个 · <b>0..*</b> 零或多个 · <b>1..*</b> 一个或多个</span></p>
+      <p class="er-note">按租户、环境和项目识别对象。工具 Span 在 metadata 里记录网关回传的 client_call_id。网关 ToolCall 的 span_id 指向入站 SDK 工具 Span，缺少可信上下文时可空。两侧记录经核验后关联。</p>
+    </section>
+    <footer><a href="tracing-architecture.md">查看完整架构设计</a> · <a href="tracing-sdk.md">查看 SDK API 设计</a></footer>
+  </main>
+</body>
+</html>
