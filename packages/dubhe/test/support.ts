@@ -8,6 +8,7 @@ import {
   createHttpRunRegistration,
   createTracingSdk,
   type RunOutcome,
+  type TraceScope,
   type VerifiedRun,
   type VerifiedTurn,
 } from 'dubhe';
@@ -33,11 +34,11 @@ export function newTurn(): VerifiedTurn {
   };
 }
 
-function read(path: string, token: string, expectedTraceId?: string): Promise<Response> {
+function read(path: string, token: string, requestedScope: TraceScope, expectedTraceId?: string): Promise<Response> {
   const query = new URLSearchParams({
-    tenant_id: scope.tenantId,
-    environment_id: scope.environmentId,
-    project_id: scope.projectId,
+    tenant_id: requestedScope.tenantId,
+    environment_id: requestedScope.environmentId,
+    project_id: requestedScope.projectId,
   });
   if (expectedTraceId) query.set('expected_trace_id', expectedTraceId);
   return fetch(`${baseUrl}/v1/observability/${path}?${query}`, {
@@ -45,12 +46,17 @@ function read(path: string, token: string, expectedTraceId?: string): Promise<Re
   });
 }
 
-export function readTrace(traceId: string, token = 'reader-token'): Promise<Response> {
-  return read(`traces/${traceId}`, token);
+export function readTrace(traceId: string, token = 'reader-token', requestedScope = scope): Promise<Response> {
+  return read(`traces/${traceId}`, token, requestedScope);
 }
 
-export function readNode(nodeId: string, expectedTraceId: string, token = 'reader-token'): Promise<Response> {
-  return read(`nodes/${nodeId}`, token, expectedTraceId);
+export function readNode(
+  nodeId: string,
+  expectedTraceId: string,
+  token = 'reader-token',
+  requestedScope = scope,
+): Promise<Response> {
+  return read(`nodes/${nodeId}`, token, requestedScope, expectedTraceId);
 }
 
 interface ModelOptions {

@@ -4,7 +4,7 @@ Dubhe 为 LangChain Agent 提供 Tracing。TypeScript SDK 通过 LangChain callb
 
 ## TypeScript 和 Go 端到端验收
 
-准备 Node.js 24、Go 和 Docker。验收入口在仓库根目录。
+准备 Node.js 24、Go 1.26 或更新版本，以及 Docker。验收入口在仓库根目录。
 
 ```sh
 ./scripts/test-tracing-v1.sh
