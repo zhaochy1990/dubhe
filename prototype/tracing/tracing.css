@@ -174,32 +174,11 @@ td {
   border-radius: 6px;
   color: #385957;
 }
-.observe-layout {
-  display: grid;
-  grid-template-columns: 210px minmax(0, 1fr);
-  gap: 16px;
-}
-.observe-filters {
-  align-self: start;
-}
-.observe-group {
-  padding: 16px 20px;
-  border-top: 1px solid #edf1ef;
-}
-.observe-group b {
-  display: block;
-  margin-bottom: 12px;
-}
-.observe-group label {
+.observe-controls {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
   align-items: center;
-  padding: 6px 0;
-  color: #536c70;
-  font-size: 12px;
-}
-.observe-group input {
-  accent-color: #087f70;
+  gap: 8px;
 }
 .observe-toolbar {
   padding: 16px 20px;
@@ -245,13 +224,6 @@ td {
   margin-top: 6px;
 }
 @media (max-width: 900px) {
-  .observe-layout {
-    grid-template-columns: 1fr;
-  }
-  .observe-group {
-    display: inline-block;
-    vertical-align: top;
-  }
   .observe-toolbar {
     flex-wrap: wrap;
   }

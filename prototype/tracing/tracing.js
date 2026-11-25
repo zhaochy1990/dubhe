@@ -22,12 +22,10 @@ function sessionOffset(row, index, days) {
 function renderSessions(state = {}) {
   document.getElementById("crumb").textContent = "Agent 观测";
   let p = document.getElementById("page");
-  p.innerHTML = `<div class="heading"><div><h1>Agent 观测</h1><p>按会话查看 Agent、模型和工具的调用轨迹。</p></div><select class="btn" id="traceTime" aria-label="时间范围"><option>最近 7 天</option><option>最近 24 小时</option><option>最近 30 天</option></select></div><div class="observe-layout"><aside class="panel observe-filters"><div class="panel-head"><h2>筛选</h2><button class="link" id="resetObserve">清除</button></div><div class="observe-group"><b>Agent</b>${[...new Set(sessionData.map((x) => x[1]))].map((v) => `<label><input type="checkbox" value="${v}" data-observe="agent">${v}</label>`).join("")}</div></aside><section class="panel observe-main"><div class="observe-toolbar"><h2>Sessions</h2><input id="sessionSearch" aria-label="搜索 Session 或 Agent" placeholder="搜索 Session 或 Agent"></div><div class="observe-chart"><div><b>会话数量</b><span id="chartRange"></span></div><div class="bars" id="sessionBars" role="img" aria-label="会话数量分布"></div><div class="chart-labels"><span id="chartStart"></span><span>今天</span></div></div><div class="table-wrap"><table><thead><tr><th>开始时间</th><th>Session ID</th><th>Agent</th><th>发起人</th><th>工具调用</th><th>耗时</th></tr></thead><tbody id="sessionRows"></tbody></table></div><div class="pagination"><span id="sessionCount"></span></div></section></div>`;
+  p.innerHTML = `<div class="heading"><div><h1>Agent 观测</h1><p>按会话查看 Agent、模型和工具的调用轨迹。</p></div><div class="observe-controls"><select class="btn" id="traceTime" aria-label="时间范围"><option>最近 7 天</option><option>最近 24 小时</option><option>最近 30 天</option></select><select class="btn" id="traceAgent" aria-label="Agent"><option value="">全部 Agent</option>${[...new Set(sessionData.map((row) => row[1]))].map((name) => `<option>${name}</option>`).join("")}</select></div></div><section class="panel observe-main"><div class="observe-toolbar"><h2>Sessions</h2><input id="sessionSearch" aria-label="搜索 Session 或 Agent" placeholder="搜索 Session 或 Agent"></div><div class="observe-chart"><div><b>会话数量</b><span id="chartRange"></span></div><div class="bars" id="sessionBars" role="img" aria-label="会话数量分布"></div><div class="chart-labels"><span id="chartStart"></span><span>今天</span></div></div><div class="table-wrap"><table><thead><tr><th>开始时间</th><th>Session ID</th><th>Agent</th><th>发起人</th><th>工具调用</th><th>耗时</th></tr></thead><tbody id="sessionRows"></tbody></table></div><div class="pagination"><span id="sessionCount"></span></div></section>`;
   function draw() {
-    let q = document.getElementById("sessionSearch").value.toLowerCase(),
-      agents = [...p.querySelectorAll('[data-observe="agent"]:checked')].map(
-        (x) => x.value,
-      );
+    const q = p.querySelector("#sessionSearch").value.toLowerCase();
+    const agent = p.querySelector("#traceAgent").value;
     const range = p.querySelector("#traceTime");
     const days = [7, 1, 30][range.selectedIndex];
     const bucketCount = days === 1 ? 24 : days;
@@ -36,7 +34,7 @@ function renderSessions(state = {}) {
         sessionOffset(r, i, days) >= 0 &&
         sessionOffset(r, i, days) < bucketCount &&
         r.join(" ").toLowerCase().includes(q) &&
-        (!agents.length || agents.includes(r[1])),
+        (!agent || agent === r[1]),
     );
     const counts = Array.from({ length: bucketCount }, () => 0);
     for (const row of filtered) {
@@ -67,26 +65,18 @@ function renderSessions(state = {}) {
         (el.onclick = () =>
           renderTrace(el.closest("tr").dataset.id, {
             query: p.querySelector("#sessionSearch").value,
-            agents,
+            agent,
             time: p.querySelector("#traceTime").value,
             scroll: window.scrollY,
           })),
     );
   }
-  p.querySelectorAll("[data-observe]").forEach((el) => (el.onchange = draw));
-  document.getElementById("sessionSearch").oninput = draw;
+  p.querySelector("#sessionSearch").oninput = draw;
   p.querySelector("#traceTime").onchange = draw;
-  document.getElementById("resetObserve").onclick = () => {
-    p.querySelectorAll("[data-observe]").forEach((el) => (el.checked = false));
-    document.getElementById("sessionSearch").value = "";
-    p.querySelector("#traceTime").selectedIndex = 0;
-    draw();
-  };
+  p.querySelector("#traceAgent").onchange = draw;
   p.querySelector("#sessionSearch").value = state.query || "";
+  p.querySelector("#traceAgent").value = state.agent || "";
   if (state.time) p.querySelector("#traceTime").value = state.time;
-  p.querySelectorAll("[data-observe]").forEach(
-    (el) => (el.checked = state.agents?.includes(el.value) || false),
-  );
   draw();
 }
 const traceSystemPrompt = `你是企业客服助手，负责查看订单、整理物流进度，并在授权范围内协助客户沟通。请用简明的中文回答，先说明已核实的结果，再说明下一步。
