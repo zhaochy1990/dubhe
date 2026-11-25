@@ -9,17 +9,17 @@ database:
     dsn: "dubhe:change-me@tcp(127.0.0.1:3306)/dubhe"
     # read_dsn: "dubhe_reader:change-me@tcp(127.0.0.1:3306)/dubhe"
 
-# Replace the sample tokens when configuring your own service.
+# Replace these sample API keys with independently generated secrets.
 auth:
   workloads:
-    - token: "local-workload-token"
+    - api_key: "local-workload-key"
       scope: &scope {tenant_id: "tenant-alpha", environment_id: "staging", project_id: "support"}
       producer_id: "agent-worker"
   registrars:
-    - token: "local-registration-token"
+    - api_key: "local-registration-key"
       scope: *scope
       producer_id: "agent-worker"
   readers:
-    - token: "local-reader-token"
+    - api_key: "local-reader-key"
       scope: *scope
       agent_ids: ["support-agent"]

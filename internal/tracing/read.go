@@ -60,7 +60,7 @@ func scanNode(row interface{ Scan(...any) error }) (nodeView, error) {
 	return view, nil
 }
 
-func (s store) trace(ctx context.Context, reader reader, traceID []byte) (*traceView, error) {
+func (s store) trace(ctx context.Context, reader authenticatedIdentity, traceID []byte) (*traceView, error) {
 	if len(reader.AgentIDs) == 0 {
 		return nil, nil
 	}
@@ -103,7 +103,7 @@ func (s store) trace(ctx context.Context, reader reader, traceID []byte) (*trace
 	return result, err
 }
 
-func (s store) node(ctx context.Context, reader reader, spanID, expectedTraceID []byte) (*nodeDetail, error) {
+func (s store) node(ctx context.Context, reader authenticatedIdentity, spanID, expectedTraceID []byte) (*nodeDetail, error) {
 	if len(reader.AgentIDs) == 0 {
 		return nil, nil
 	}

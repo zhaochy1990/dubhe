@@ -3,7 +3,6 @@ package tracing
 import (
 	"compress/gzip"
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,123 +25,14 @@ const (
 	maxOTLPBytes = 4 * 1024 * 1024
 )
 
-type WorkloadCredential struct {
-	Token      string `json:"-" mapstructure:"token"`
-	Scope      Scope  `json:"scope" mapstructure:"scope"`
-	ProducerID string `json:"producer_id" mapstructure:"producer_id"`
-}
-
-type ReaderCredential struct {
-	Token    string   `json:"-" mapstructure:"token"`
-	Scope    Scope    `json:"scope" mapstructure:"scope"`
-	AgentIDs []string `json:"agent_ids" mapstructure:"agent_ids"`
-}
-
-type workload = WorkloadCredential
-type reader = ReaderCredential
-
-type AuthConfig struct {
-	Workloads  []WorkloadCredential `mapstructure:"workloads"`
-	Registrars []WorkloadCredential `mapstructure:"registrars"`
-	Readers    []ReaderCredential   `mapstructure:"readers"`
-}
-
-type authConfig struct {
-	Workloads  map[string]workload `json:"workloads"`
-	Registrars map[string]workload `json:"registrars"`
-	Readers    map[string]reader   `json:"readers"`
-}
-
-// ParseLegacyAuth supports the JSON environment configuration used by earlier builds.
-func ParseLegacyAuth(raw string) (AuthConfig, error) {
-	var legacy authConfig
-	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
-		return AuthConfig{}, errors.New("DUBHE_TRACING_AUTH must contain valid credential configuration")
-	}
-	var config AuthConfig
-	for token, entry := range legacy.Workloads {
-		entry.Token = token
-		config.Workloads = append(config.Workloads, entry)
-	}
-	for token, entry := range legacy.Registrars {
-		entry.Token = token
-		config.Registrars = append(config.Registrars, entry)
-	}
-	for token, entry := range legacy.Readers {
-		entry.Token = token
-		config.Readers = append(config.Readers, entry)
-	}
-	return config, nil
-}
-
-func validateAuth(config AuthConfig) (authConfig, error) {
-	auth := authConfig{
-		Workloads:  make(map[string]workload),
-		Registrars: make(map[string]workload),
-		Readers:    make(map[string]reader),
-	}
-	tokens := make(map[string]bool)
-	checkToken := func(token string) bool {
-		if token == "" || strings.ContainsAny(token, " \t\r\n") || tokens[token] {
-			return false
-		}
-		tokens[token] = true
-		return true
-	}
-	addWorkloads := func(entries []WorkloadCredential, identities map[string]workload) error {
-		for _, identity := range entries {
-			if !checkToken(identity.Token) || !identity.Scope.valid() || !opaqueID(identity.ProducerID) {
-				return errors.New("invalid workload or registration credential configuration")
-			}
-			identities[identity.Token] = identity
-		}
-		return nil
-	}
-	if err := addWorkloads(config.Workloads, auth.Workloads); err != nil {
-		return authConfig{}, err
-	}
-	if err := addWorkloads(config.Registrars, auth.Registrars); err != nil {
-		return authConfig{}, err
-	}
-	for _, identity := range config.Readers {
-		if !checkToken(identity.Token) || !identity.Scope.valid() {
-			return authConfig{}, errors.New("invalid reader credential configuration")
-		}
-		for _, id := range identity.AgentIDs {
-			if !opaqueID(id) {
-				return authConfig{}, errors.New("invalid reader Agent grant")
-			}
-		}
-		auth.Readers[identity.Token] = identity
-	}
-	return auth, nil
-}
-
-func bearer[T any](request *http.Request, identities map[string]T) (T, bool) {
-	var unknown T
-	if len(request.Header.Values("Authorization")) != 1 {
-		return unknown, false
-	}
-	scheme, token, ok := strings.Cut(request.Header.Get("Authorization"), " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
-		return unknown, false
-	}
-	for expected, identity := range identities {
-		if subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1 {
-			return identity, true
-		}
-	}
-	return unknown, false
-}
-
 type service struct {
 	writeStore store
 	readStore  store
-	auth       authConfig
+	auth       authenticator
 }
 
 func NewHandler(writeDB, readDB *gorm.DB, config AuthConfig) (http.Handler, error) {
-	auth, err := validateAuth(config)
+	auth, err := newAPIKeyAuthenticator(config)
 	if err != nil {
 		return nil, err
 	}
@@ -155,8 +45,20 @@ func NewHandler(writeDB, readDB *gorm.DB, config AuthConfig) (http.Handler, erro
 	return handler, nil
 }
 
+func (s service) authenticate(r *http.Request, role authRole) (authenticatedIdentity, bool, error) {
+	credential, ok := readCredential(r.Header)
+	if !ok {
+		return authenticatedIdentity{}, false, nil
+	}
+	return s.auth.authenticate(r.Context(), credential, role)
+}
+
 func (s service) ingest(w http.ResponseWriter, r *http.Request) {
-	identity, authorized := bearer(r, s.auth.Workloads)
+	identity, authorized, authErr := s.authenticate(r, workloadRole)
+	if authErr != nil {
+		writeOTLPError(w, http.StatusServiceUnavailable, code.Code_UNAVAILABLE, "Authentication service unavailable")
+		return
+	}
 	if !authorized {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeOTLPError(w, http.StatusUnauthorized, code.Code_UNAUTHENTICATED, "Workload authentication required")
@@ -248,7 +150,11 @@ func writeProto(w http.ResponseWriter, httpStatus int, message proto.Message) {
 }
 
 func (s service) register(w http.ResponseWriter, r *http.Request) {
-	identity, authorized := bearer(r, s.auth.Registrars)
+	identity, authorized, authErr := s.authenticate(r, registrarRole)
+	if authErr != nil {
+		writeDetail(w, http.StatusServiceUnavailable, "Authentication service unavailable")
+		return
+	}
 	if !authorized {
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeDetail(w, http.StatusUnauthorized, "Registration authentication required")
@@ -282,21 +188,25 @@ func (s service) register(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func authorizedReader(r *http.Request, readers map[string]reader) (reader, url.Values, bool) {
-	identity, authorized := bearer(r, readers)
+func (s service) authorizedReader(r *http.Request) (authenticatedIdentity, url.Values, bool, error) {
+	identity, authorized, authErr := s.authenticate(r, readerRole)
 	query, err := url.ParseQuery(r.URL.RawQuery)
 	if !authorized || err != nil {
-		return reader{}, nil, false
+		return authenticatedIdentity{}, nil, false, authErr
 	}
 	tenant, environment, project := query["tenant_id"], query["environment_id"], query["project_id"]
 	if len(tenant) != 1 || len(environment) != 1 || len(project) != 1 {
-		return reader{}, nil, false
+		return authenticatedIdentity{}, nil, false, nil
 	}
-	return identity, query, identity.Scope == (Scope{tenant[0], environment[0], project[0]})
+	return identity, query, identity.Scope == (Scope{tenant[0], environment[0], project[0]}), nil
 }
 
 func (s service) getTrace(w http.ResponseWriter, r *http.Request) {
-	identity, _, authorized := authorizedReader(r, s.auth.Readers)
+	identity, _, authorized, authErr := s.authorizedReader(r)
+	if authErr != nil {
+		writeDetail(w, http.StatusServiceUnavailable, "Authentication service unavailable")
+		return
+	}
 	traceID, ok := parseID(r.PathValue("trace_id"), 16)
 	if !authorized || !ok {
 		writeDetail(w, http.StatusNotFound, "Not available")
@@ -316,7 +226,11 @@ func (s service) getTrace(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s service) getNode(w http.ResponseWriter, r *http.Request) {
-	identity, query, authorized := authorizedReader(r, s.auth.Readers)
+	identity, query, authorized, authErr := s.authorizedReader(r)
+	if authErr != nil {
+		writeDetail(w, http.StatusServiceUnavailable, "Authentication service unavailable")
+		return
+	}
 	kind, rawID, _ := strings.Cut(r.PathValue("node_id"), ":")
 	spanID, ok := parseID(rawID, 8)
 	if !authorized || !ok || kind != "span" || len(query["expected_trace_id"]) > 1 {

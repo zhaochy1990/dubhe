@@ -43,7 +43,7 @@ function read(path: string, token: string, requestedScope: TraceScope, expectedT
   });
   if (expectedTraceId) query.set('expected_trace_id', expectedTraceId);
   return fetch(`${baseUrl}/v1/observability/${path}?${query}`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { 'X-API-Key': token },
   });
 }
 
@@ -109,7 +109,7 @@ export function setup(
     scope,
     producerId: 'agent-worker',
     otlpTraceEndpoint: otlpUrl,
-    getOtlpHeaders: async () => ({ Authorization: 'Bearer workload-token' }),
+    getOtlpHeaders: async () => ({ 'X-API-Key': 'workload-token' }),
     host: {
       async prepareRun(candidate) {
         const key = JSON.stringify([candidate.sessionId, candidate.turnId]);
@@ -121,7 +121,7 @@ export function setup(
     },
     registration: delivery.registration ?? createHttpRunRegistration({
       url: `${baseUrl}/internal/v1/observability/runs`,
-      getHeaders: async () => ({ Authorization: 'Bearer register-token' }),
+      getHeaders: async () => ({ 'X-API-Key': 'register-token' }),
     }),
     maxBufferedSpans: delivery.maxBufferedSpans,
   });

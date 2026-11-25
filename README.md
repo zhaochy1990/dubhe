@@ -24,11 +24,11 @@ const sdk = createTracingSdk({
   scope,
   producerId,
   otlpTraceEndpoint: `${tracingUrl}/v1/traces`,
-  getOtlpHeaders: getWorkloadHeaders,
+  getOtlpHeaders: async () => ({ "X-API-Key": workloadAPIKey }),
   host: trustedHost,
   registration: createHttpRunRegistration({
     url: `${tracingUrl}/internal/v1/observability/runs`,
-    getHeaders: getRegistrationHeaders,
+    getHeaders: async () => ({ "X-API-Key": registrationAPIKey }),
   }),
 });
 const tracing = new LangChainTracing(sdk);
@@ -54,14 +54,16 @@ go run ./cmd/dubhe-tracing --config config.yaml --database-driver mysql
 
 数据库连接取自 `database.sqlite` 或 `database.mysql`。其中 `dsn` 用于写入，可选的 `read_dsn` 为查询配置同库的独立连接池。MySQL 查询账号可仅授予 `SELECT` 权限。配置优先级由高到低为命令行、环境变量和 YAML。可用 `DUBHE_DATABASE_DRIVER`、`DUBHE_LISTEN`、`DUBHE_SQLITE_DSN`、`DUBHE_MYSQL_DSN` 及对应的 `READ_DSN` 环境变量覆盖配置。`DUBHE_TRACING_AUTH` 仍接受旧版 JSON 鉴权配置。
 
-YAML 的 `auth` 配置提供 `workloads`、`registrars` 和 `readers` 三类服务端身份。各身份绑定 `scope`，上报和登记身份还绑定 `producer_id`，读身份包含 `agent_ids`。将示例中的 Token 替换为自己的凭据。
+YAML 的 `auth` 配置提供 `workloads`、`registrars` 和 `readers` 三类身份。分别为上报、登记和查询配置独立的随机 `api_key`，客户端在请求中发送 `X-API-Key`。各身份绑定 `scope`，上报和登记身份还绑定 `producer_id`，读身份包含 `agent_ids`。
+
+旧版 YAML 的 `token` 字段和 `DUBHE_TRACING_AUTH` 中的凭据继续接受 `Authorization: Bearer`。Go 的 `authenticator` 接口负责把请求凭据解析后的值映射为指定角色的身份，供后续接入 OAuth 2.0。[OAuth 2.0 实现票 #10](https://github.com/zhaochy1990/dubhe/issues/10)
 
 - `POST /internal/v1/observability/runs` 接受可信入口使用独立内部凭据提交的轮次绑定。
 - `POST /v1/traces` 接受以工作负载身份鉴权的 OTLP/HTTP 二进制 Protobuf 批次，支持 gzip。
 - `GET /v1/observability/traces/{trace_id}` 返回 Trace 及其节点。
 - `GET /v1/observability/nodes/span:{span_id}` 返回单个 Span，可带 `expected_trace_id` 确认 Trace 归属。
 
-查询须提供 `tenant_id`、`environment_id` 和 `project_id` 参数，并使用有相应作用域和 Agent 权限的读身份。
+查询须提供 `tenant_id`、`environment_id` 和 `project_id` 参数，并通过 `X-API-Key` 发送有相应作用域和 Agent 权限的读身份凭据。
 
 ## Python 参考实现
 

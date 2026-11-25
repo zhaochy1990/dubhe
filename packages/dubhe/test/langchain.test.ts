@@ -137,7 +137,7 @@ test('native streaming completes during an OTLP outage and background retry deli
         return;
       }
       const headers = new Headers();
-      for (const name of ['authorization', 'content-type', 'content-encoding']) {
+      for (const name of ['x-api-key', 'content-type', 'content-encoding']) {
         const value = request.headers[name];
         if (typeof value === 'string') headers.set(name, value);
       }

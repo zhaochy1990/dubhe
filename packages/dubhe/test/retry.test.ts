@@ -81,7 +81,7 @@ test('the SDK resends committed Span IDs when the OTLP acknowledgement is lost',
       const received = await fetch(`${baseUrl}/v1/traces`, {
         method: 'POST',
         headers: {
-          authorization: request.headers.authorization ?? '',
+          'x-api-key': request.headers['x-api-key']?.toString() ?? '',
           'content-type': request.headers['content-type'] ?? '',
           ...(encoding ? { 'content-encoding': encoding } : {}),
         },

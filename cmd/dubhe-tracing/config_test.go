@@ -24,7 +24,7 @@ database:
     read_dsn: "mysql-read-dsn"
 auth:
   readers:
-    - token: "Case.Sensitive-Token"
+    - api_key: "Case.Sensitive-Token"
       scope: {tenant_id: "Tenant", environment_id: "staging", project_id: "project"}
       agent_ids: ["agent"]
 `)
@@ -39,7 +39,7 @@ auth:
 	if cfg.Database.Driver != "sqlite" || cfg.Database.SQLite.DSN != "testing.db" || cfg.Server.Listen != "127.0.0.1:9050" {
 		t.Fatalf("wrong selected profile or listen address: %+v", cfg.Database)
 	}
-	if len(cfg.Auth.Readers) != 1 || cfg.Auth.Readers[0].Token != "Case.Sensitive-Token" || cfg.Auth.Readers[0].Scope.TenantID != "Tenant" {
+	if len(cfg.Auth.Readers) != 1 || cfg.Auth.Readers[0].APIKey != "Case.Sensitive-Token" || cfg.Auth.Readers[0].Scope.TenantID != "Tenant" {
 		t.Fatal("YAML failed to preserve credential or scope casing")
 	}
 

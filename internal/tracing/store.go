@@ -97,7 +97,7 @@ func (g spanGrant) permits(span spanRecord, producer string, now uint64) bool {
 	return string(span.SpanID) != g.rootSpanID && string(span.ParentID) == g.rootSpanID
 }
 
-func (s store) ingest(ctx context.Context, workload workload, spans []spanRecord) (int64, error) {
+func (s store) ingest(ctx context.Context, workload authenticatedIdentity, spans []spanRecord) (int64, error) {
 	now, _ := unixNano(time.Now())
 	grants := make(map[string]spanGrant)
 	var rejected int64
@@ -132,7 +132,7 @@ func (s store) ingest(ctx context.Context, workload workload, spans []spanRecord
 	return rejected, err
 }
 
-func (s store) persistSpan(tx *gorm.DB, workload workload, span spanRecord) (bool, error) {
+func (s store) persistSpan(tx *gorm.DB, workload authenticatedIdentity, span spanRecord) (bool, error) {
 	metadata := "{}"
 	var outcome any
 	if span.Outcome != "" {

@@ -47,12 +47,12 @@ func sqliteAPI(t *testing.T) (*httptest.Server, *gorm.DB) {
 	otherProject := testScope
 	otherProject.ProjectID = "other-project"
 	handler, err := NewHandler(writer, reader, AuthConfig{
-		Workloads:  []WorkloadCredential{{Token: "ingest", Scope: testScope, ProducerID: "worker"}},
-		Registrars: []WorkloadCredential{{Token: "register", Scope: testScope, ProducerID: "worker"}},
+		Workloads:  []WorkloadCredential{{APIKey: "ingest", Scope: testScope, ProducerID: "worker"}},
+		Registrars: []WorkloadCredential{{APIKey: "register", Scope: testScope, ProducerID: "worker"}},
 		Readers: []ReaderCredential{
-			{Token: "query", Scope: testScope, AgentIDs: []string{"agent"}},
-			{Token: "other-agent", Scope: testScope, AgentIDs: []string{"other-agent"}},
-			{Token: "other-project", Scope: otherProject, AgentIDs: []string{"agent"}},
+			{APIKey: "query", Scope: testScope, AgentIDs: []string{"agent"}},
+			{APIKey: "other-agent", Scope: testScope, AgentIDs: []string{"other-agent"}},
+			{APIKey: "other-project", Scope: otherProject, AgentIDs: []string{"agent"}},
 		},
 	})
 	if err != nil {
@@ -70,7 +70,7 @@ func request(t *testing.T, server *httptest.Server, method, path, token, content
 		t.Fatal(err)
 	}
 	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("X-API-Key", token)
 	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)

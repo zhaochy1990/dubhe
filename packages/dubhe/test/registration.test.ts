@@ -35,7 +35,7 @@ test('a registration outage bounds work and recovery exports only buffered turns
   const release = Promise.withResolvers<void>();
   const realRegistration = createHttpRunRegistration({
     url: `${baseUrl}/internal/v1/observability/runs`,
-    getHeaders: async () => ({ Authorization: 'Bearer register-token' }),
+    getHeaders: async () => ({ 'X-API-Key': 'register-token' }),
   });
   const attempted = new Map<string, AbortSignal>();
   const { sdk, tracing, binding } = setup(undefined, {

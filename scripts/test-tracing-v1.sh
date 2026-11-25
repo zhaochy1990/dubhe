@@ -30,27 +30,27 @@ export DUBHE_TEST_SQLITE_PATH="$run_dir/tracing.db"
 cat > "$run_dir/tracing.yaml" <<'YAML'
 auth:
   workloads:
-    - token: "workload-token"
+    - api_key: "workload-token"
       scope: &scope {tenant_id: "tenant-alpha", environment_id: "staging", project_id: "support"}
       producer_id: "agent-worker"
   registrars:
-    - token: "register-token"
+    - api_key: "register-token"
       scope: *scope
       producer_id: "agent-worker"
   readers:
-    - token: "reader-token"
+    - api_key: "reader-token"
       scope: *scope
       agent_ids: ["support-agent"]
-    - token: "other-tenant-reader"
+    - api_key: "other-tenant-reader"
       scope: {tenant_id: "tenant-beta", environment_id: "staging", project_id: "support"}
       agent_ids: ["support-agent"]
-    - token: "other-environment-reader"
+    - api_key: "other-environment-reader"
       scope: {tenant_id: "tenant-alpha", environment_id: "Staging", project_id: "support"}
       agent_ids: ["support-agent"]
-    - token: "other-project-reader"
+    - api_key: "other-project-reader"
       scope: {tenant_id: "tenant-alpha", environment_id: "staging", project_id: "billing"}
       agent_ids: ["support-agent"]
-    - token: "other-agent-reader"
+    - api_key: "other-agent-reader"
       scope: *scope
       agent_ids: ["billing-agent"]
 YAML
