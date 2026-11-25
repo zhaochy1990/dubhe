@@ -1,8 +1,64 @@
 # Dubhe
 
-Dubhe 为 Python LangChain Agent 提供 Tracing。可信入口为已验证的轮次绑定 Trace，应用继续调用原生 `ainvoke()`。Dubhe 通过标准 OpenTelemetry OTLP/HTTP exporter 上报根运行和模型 Span，Tracing 将归一化记录提交到 MySQL InnoDB 后确认。Trace 和 Span 详情查询校验租户、环境、项目及 Agent 权限。
+Dubhe 为 LangChain Agent 提供 Tracing。TypeScript SDK 通过 LangChain callback 记录运行和模型 Span，Go 服务接收 OTLP/HTTP 数据，在 MySQL InnoDB 提交后确认。Trace 和 Span 查询校验租户、环境、项目及 Agent 权限。
 
-## 本地验证
+## TypeScript 和 Go 端到端验收
+
+准备 Node.js 24、Go 和 Docker。验收入口在仓库根目录。
+
+```sh
+./scripts/test-tracing-v1.sh
+```
+
+脚本启动 MySQL 8.4 和真实 Go HTTP 服务，构建 TypeScript 包并执行验收用例。模型由测试控制，无需供应商凭据。脚本退出时会停止启动的服务和数据库容器。
+
+如已有专用测试库，可同时设置 `DUBHE_TEST_MYSQL_DSN`（Go MySQL DSN）和 `DUBHE_TEST_MYSQL_URL`（`mysql://` URL）。可通过 `GO` 指定 Go 工具链路径。
+
+### 接入 TypeScript Agent
+
+在应用启动时创建一次 SDK。可信宿主的 `prepareRun` 按作用域、Session 和轮次原子认领 Trace，并持久保存绑定。SDK 使用独立的登记身份和上报身份，在可信登记提交后发送已结束的 Span。
+
+```typescript
+import { createHttpRunRegistration, createTracingSdk } from "dubhe";
+import { LangChainTracing } from "dubhe/langchain";
+
+const sdk = createTracingSdk({
+  scope,
+  producerId,
+  otlpTraceEndpoint: `${tracingUrl}/v1/traces`,
+  getOtlpHeaders: getWorkloadHeaders,
+  host: trustedHost,
+  registration: createHttpRunRegistration({
+    url: `${tracingUrl}/internal/v1/observability/runs`,
+    getHeaders: getRegistrationHeaders,
+  }),
+});
+const tracing = new LangChainTracing(sdk);
+
+const config = await tracing.prepareConfig(verifiedTurn, existingConfig);
+try {
+  await agent.invoke(input, config);
+} finally {
+  tracing.finish(config);
+}
+```
+
+流式调用沿用 `await agent.stream(input, { ...config, streamMode: "messages" })` 返回的异步迭代器。应用负责消费和关闭迭代器，退出时调用 `finish(config)`。提前关闭时由可信宿主确认轮次的取消结果。应用退出时可用 `await sdk.shutdown({ timeoutMs: 5_000 })` 排空遥测。
+
+### 运行 Go Tracing 服务
+
+`go run ./cmd/dubhe-tracing` 读取 `DUBHE_MYSQL_DSN`、`DUBHE_LISTEN` 和 `DUBHE_TRACING_AUTH`。鉴权配置提供 `workloads`、`registrars` 和 `readers` 三类服务端身份。各身份绑定 `scope`，上报和登记身份还绑定 `producer_id`，读身份包含 `agent_ids`。验收脚本包含本地静态 Token 配置示例。
+
+- `POST /internal/v1/observability/runs` 接受可信入口使用独立内部凭据提交的轮次绑定。
+- `POST /v1/traces` 接受以工作负载身份鉴权的 OTLP/HTTP 二进制 Protobuf 批次，支持 gzip。
+- `GET /v1/observability/traces/{trace_id}` 返回 Trace 及其节点。
+- `GET /v1/observability/nodes/span:{span_id}` 返回单个 Span，可带 `expected_trace_id` 确认 Trace 归属。
+
+查询须提供 `tenant_id`、`environment_id` 和 `project_id` 参数，并使用有相应作用域和 Agent 权限的读身份。
+
+## Python 参考实现
+
+### 本地验证
 
 需要 Python 3.11 或更新版本、[uv](https://docs.astral.sh/uv/) 和 Docker。以下命令启动本地 MySQL 8.4，然后运行端到端测试。模型使用固定响应，无需供应商凭据。
 
@@ -18,7 +74,7 @@ uv run --locked --all-extras pytest -q
 
 可以用 `DUBHE_TEST_MYSQL_HOST`、`DUBHE_TEST_MYSQL_PORT`、`DUBHE_TEST_MYSQL_USER`、`DUBHE_TEST_MYSQL_PASSWORD` 和 `DUBHE_TEST_MYSQL_DATABASE` 指定专用测试库。测试在实际 HTTP 端口上启动接收和查询服务，验证现有 callback 和 LangGraph checkpoint、登记重试、普通调用的异常和取消、Trace 中的父子关系及跨作用域的查询结果。
 
-## 接入原生调用
+### 接入原生调用
 
 在应用启动时创建 `TracingSdk` 和 `LangChainTracing`。`prepare_run` 由可信宿主实现，按作用域、Session 和轮次原子认领 `VerifiedRun`，已有绑定时返回 `False`。`register_run` 接收同一份绑定并在后台登记。登记暂时不可用时，适配器抛出 `dubhe.TransientRegistrationError`，SDK 对同一绑定退避重试，每次退避等待最长 5 秒，并在接收截止或 SDK 停止排空时结束重试。`TraceStore.register_run` 会转换 MySQL 连接中断和事务锁竞争等暂时故障。SDK 在登记提交后才发送已结束的 Span。
 
@@ -47,7 +103,7 @@ async def invoke_turn(agent, verified_turn, inputs, existing_config=None):
 
 `verified_turn` 由宿主根据已认证的会话和请求构建，Session 内各轮共用可信会话开始时间和根 Agent。应用退出时调用 `await sdk.shutdown(timeout_ms=5_000)`。在测试或短生命周期程序中，可以先 `await sdk.flush(timeout_ms=5_000)` 排空已结束 Span 的队列，再通过查询确认记录可见。
 
-## 接收与查询
+### 接收与查询
 
 `dubhe.service.create_app(store, auth)` 构建 ASGI 应用，可用 Uvicorn 运行。通过 `TraceStore.initialize_schema()` 初始化 MySQL 表，然后用可信的内部适配器调用 `TraceStore.register_run()`。可以用 `query_store` 为查询配置独立的只读 MySQL 账号。
 
