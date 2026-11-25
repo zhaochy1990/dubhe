@@ -1,31 +1,14 @@
 const sessionData = [
-  [
-    "SES-2026-0842",
-    "客服助手",
-    "用户 A",
-    "今天 10:42",
-    "3 次调用",
-    "已阻断",
-    "1.28 s",
-  ],
+  ["SES-2026-0842", "客服助手", "用户 A", "今天 10:42", "3 次调用", "1.28 s"],
   [
     "SES-2026-0841",
     "运营分析 Agent",
     "自主任务",
     "2 天前 10:14",
     "3 次调用",
-    "已拒绝",
     "860 ms",
   ],
-  [
-    "SES-2026-0840",
-    "客服助手",
-    "用户 B",
-    "9 天前 09:36",
-    "1 次调用",
-    "已完成",
-    "425 ms",
-  ],
+  ["SES-2026-0840", "客服助手", "用户 B", "9 天前 09:36", "1 次调用", "425 ms"],
 ];
 const sessionAges = [0, 2, 9];
 const demoMinuteOfDay = 11 * 60;
@@ -39,13 +22,10 @@ function sessionOffset(row, index, days) {
 function renderSessions(state = {}) {
   document.getElementById("crumb").textContent = "Agent 观测";
   let p = document.getElementById("page");
-  p.innerHTML = `<div class="heading"><div><h1>Agent 观测</h1><p>按会话查看 Agent、模型和工具的调用轨迹。</p></div><select class="btn" id="traceTime" aria-label="时间范围"><option>最近 7 天</option><option>最近 24 小时</option><option>最近 30 天</option></select></div><div class="observe-layout"><aside class="panel observe-filters"><div class="panel-head"><h2>筛选</h2><button class="link" id="resetObserve">清除</button></div><div class="observe-group"><b>Agent</b>${[...new Set(sessionData.map((x) => x[1]))].map((v) => `<label><input type="checkbox" value="${v}" data-observe="agent">${v}</label>`).join("")}</div><div class="observe-group"><b>结果</b>${["已完成", "已阻断", "已拒绝"].map((v) => `<label><input type="checkbox" value="${v}" data-observe="result">${v}</label>`).join("")}</div></aside><section class="panel observe-main"><div class="observe-toolbar"><h2>Sessions</h2><input id="sessionSearch" aria-label="搜索 Session 或 Agent" placeholder="搜索 Session 或 Agent"></div><div class="observe-chart"><div><b>会话数量</b><span id="chartRange"></span></div><div class="bars" id="sessionBars" role="img" aria-label="会话数量分布"></div><div class="chart-labels"><span id="chartStart"></span><span>今天</span></div></div><div class="table-wrap"><table><thead><tr><th>开始时间</th><th>Session ID</th><th>Agent</th><th>发起人</th><th>工具调用</th><th>结果</th><th>耗时</th></tr></thead><tbody id="sessionRows"></tbody></table></div><div class="pagination"><span id="sessionCount"></span></div></section></div>`;
+  p.innerHTML = `<div class="heading"><div><h1>Agent 观测</h1><p>按会话查看 Agent、模型和工具的调用轨迹。</p></div><select class="btn" id="traceTime" aria-label="时间范围"><option>最近 7 天</option><option>最近 24 小时</option><option>最近 30 天</option></select></div><div class="observe-layout"><aside class="panel observe-filters"><div class="panel-head"><h2>筛选</h2><button class="link" id="resetObserve">清除</button></div><div class="observe-group"><b>Agent</b>${[...new Set(sessionData.map((x) => x[1]))].map((v) => `<label><input type="checkbox" value="${v}" data-observe="agent">${v}</label>`).join("")}</div></aside><section class="panel observe-main"><div class="observe-toolbar"><h2>Sessions</h2><input id="sessionSearch" aria-label="搜索 Session 或 Agent" placeholder="搜索 Session 或 Agent"></div><div class="observe-chart"><div><b>会话数量</b><span id="chartRange"></span></div><div class="bars" id="sessionBars" role="img" aria-label="会话数量分布"></div><div class="chart-labels"><span id="chartStart"></span><span>今天</span></div></div><div class="table-wrap"><table><thead><tr><th>开始时间</th><th>Session ID</th><th>Agent</th><th>发起人</th><th>工具调用</th><th>耗时</th></tr></thead><tbody id="sessionRows"></tbody></table></div><div class="pagination"><span id="sessionCount"></span></div></section></div>`;
   function draw() {
     let q = document.getElementById("sessionSearch").value.toLowerCase(),
       agents = [...p.querySelectorAll('[data-observe="agent"]:checked')].map(
-        (x) => x.value,
-      ),
-      results = [...p.querySelectorAll('[data-observe="result"]:checked')].map(
         (x) => x.value,
       );
     const range = p.querySelector("#traceTime");
@@ -56,8 +36,7 @@ function renderSessions(state = {}) {
         sessionOffset(r, i, days) >= 0 &&
         sessionOffset(r, i, days) < bucketCount &&
         r.join(" ").toLowerCase().includes(q) &&
-        (!agents.length || agents.includes(r[1])) &&
-        (!results.length || results.includes(r[5])),
+        (!agents.length || agents.includes(r[1])),
     );
     const counts = Array.from({ length: bucketCount }, () => 0);
     for (const row of filtered) {
@@ -78,9 +57,9 @@ function renderSessions(state = {}) {
       filtered
         .map(
           (r) =>
-            `<tr class="session-row" data-id="${r[0]}">${[r[3], r[0], r[1], r[2], r[4], r[5], r[6]].map((v, i) => `<td>${i === 1 ? `<button class="link session-id" type="button">${v}</button>` : v}</td>`).join("")}</tr>`,
+            `<tr class="session-row" data-id="${r[0]}">${[r[3], r[0], r[1], r[2], r[4], r[5]].map((v, i) => `<td>${i === 1 ? `<button class="link session-id" type="button">${v}</button>` : v}</td>`).join("")}</tr>`,
         )
-        .join("") || '<tr><td colspan="7">没有匹配的会话</td></tr>';
+        .join("") || '<tr><td colspan="6">没有匹配的会话</td></tr>';
     document.getElementById("sessionCount").textContent =
       `共 ${filtered.length} 个 Session`;
     p.querySelectorAll(".session-id").forEach(
@@ -89,7 +68,6 @@ function renderSessions(state = {}) {
           renderTrace(el.closest("tr").dataset.id, {
             query: p.querySelector("#sessionSearch").value,
             agents,
-            results,
             time: p.querySelector("#traceTime").value,
             scroll: window.scrollY,
           })),
@@ -107,12 +85,7 @@ function renderSessions(state = {}) {
   p.querySelector("#sessionSearch").value = state.query || "";
   if (state.time) p.querySelector("#traceTime").value = state.time;
   p.querySelectorAll("[data-observe]").forEach(
-    (el) =>
-      (el.checked =
-        (el.dataset.observe === "agent"
-          ? state.agents
-          : state.results
-        )?.includes(el.value) || false),
+    (el) => (el.checked = state.agents?.includes(el.value) || false),
   );
   draw();
 }
