@@ -522,6 +522,5 @@ select:focus-visible {
 @media (min-width: 751px) {
   .trace-inspector {
     max-height: max(630px, calc(100dvh - 185px));
-    overscroll-behavior: contain;
   }
 }
