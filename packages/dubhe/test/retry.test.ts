@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { gunzipSync } from 'node:zlib';
 import { createAgent } from 'langchain';
-import { createConnection, type RowDataPacket } from 'mysql2/promise';
 import protobuf from 'protobufjs';
 import { answer, assertTrace, baseUrl, inputs, newTurn, scope, setup, TestModel } from './support.js';
 
@@ -47,20 +47,20 @@ test('the SDK resends committed Span IDs when the OTLP acknowledgement is lost',
   skip: !baseUrl,
   timeout: 20_000,
 }, async () => {
-  const mysqlURL = process.env.DUBHE_TEST_MYSQL_URL;
-  assert.ok(mysqlURL, 'DUBHE_TEST_MYSQL_URL is required to verify the committed rows');
-  const database = await createConnection(mysqlURL);
-  async function readRows(traceId: string) {
-    const [rows] = await database.execute<RowDataPacket[]>(
-      `SELECT LOWER(HEX(span_id)) AS spanId, LOWER(HEX(trace_id)) AS traceId,
-              LOWER(HEX(parent_span_id)) AS parentSpanId
-       FROM tracing_spans WHERE tenant_id = ? AND environment_id = ? AND project_id = ?
-         AND trace_id = UNHEX(?) ORDER BY span_id`,
-      [scope.tenantId, scope.environmentId, scope.projectId, traceId],
-    );
-    return rows.map(({ spanId, traceId, parentSpanId }) => ({
-      spanId, traceId, parentSpanId: parentSpanId ?? '',
-    }));
+  const sqlitePath = process.env.DUBHE_TEST_SQLITE_PATH;
+  assert.ok(sqlitePath, 'DUBHE_TEST_SQLITE_PATH is required to verify the committed rows');
+  const database = new DatabaseSync(sqlitePath, { readOnly: true });
+  const selectSpans = database.prepare(`
+    SELECT LOWER(HEX(span_id)) AS spanId, LOWER(HEX(trace_id)) AS traceId,
+           LOWER(HEX(parent_span_id)) AS parentSpanId
+    FROM tracing_spans WHERE tenant_id = ? AND environment_id = ? AND project_id = ?
+      AND trace_id = ? ORDER BY span_id
+  `);
+  function readRows(traceId: string): SpanIDs[] {
+    return selectSpans.all(scope.tenantId, scope.environmentId, scope.projectId, Buffer.from(traceId, 'hex')).
+      map((row) => ({
+        spanId: String(row.spanId), traceId: String(row.traceId), parentSpanId: String(row.parentSpanId),
+      }));
   }
 
   let traceIdBeforeDisconnect: string | undefined;
@@ -93,7 +93,7 @@ test('the SDK resends committed Span IDs when the OTLP acknowledgement is lost',
       if (isFirstAttempt) {
         assert.ok(traceIdBeforeDisconnect);
         // Verify the committed rows from a separate connection before dropping the response.
-        committedBeforeDisconnect = await readRows(traceIdBeforeDisconnect);
+        committedBeforeDisconnect = readRows(traceIdBeforeDisconnect);
         request.socket.destroy();
         return;
       }
@@ -147,7 +147,7 @@ test('the SDK resends committed Span IDs when the OTLP acknowledgement is lost',
       assert.equal(child.traceId, traceId);
       assert.equal(child.parentSpanId, root.spanId);
       const expected = sorted([root, child]);
-      assert.deepEqual(await readRows(traceId), expected);
+      assert.deepEqual(readRows(traceId), expected);
 
       const trace = await assertTrace(binding, 'completed');
       const queried = trace.nodes.map((node) => ({
@@ -159,6 +159,6 @@ test('the SDK resends committed Span IDs when the OTLP acknowledgement is lost',
     }
   } finally {
     if (proxy.listening) await new Promise<void>((resolve) => proxy.close(() => resolve()));
-    await database.end();
+    database.close();
   }
 });

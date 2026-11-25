@@ -4,7 +4,6 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/subtle"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +18,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/code"
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
+	"gorm.io/gorm"
 )
 
 const (
@@ -26,14 +26,25 @@ const (
 	maxOTLPBytes = 4 * 1024 * 1024
 )
 
-type workload struct {
-	Scope      Scope  `json:"scope"`
-	ProducerID string `json:"producer_id"`
+type WorkloadCredential struct {
+	Token      string `json:"-" mapstructure:"token"`
+	Scope      Scope  `json:"scope" mapstructure:"scope"`
+	ProducerID string `json:"producer_id" mapstructure:"producer_id"`
 }
 
-type reader struct {
-	Scope    Scope    `json:"scope"`
-	AgentIDs []string `json:"agent_ids"`
+type ReaderCredential struct {
+	Token    string   `json:"-" mapstructure:"token"`
+	Scope    Scope    `json:"scope" mapstructure:"scope"`
+	AgentIDs []string `json:"agent_ids" mapstructure:"agent_ids"`
+}
+
+type workload = WorkloadCredential
+type reader = ReaderCredential
+
+type AuthConfig struct {
+	Workloads  []WorkloadCredential `mapstructure:"workloads"`
+	Registrars []WorkloadCredential `mapstructure:"registrars"`
+	Readers    []ReaderCredential   `mapstructure:"readers"`
 }
 
 type authConfig struct {
@@ -42,10 +53,33 @@ type authConfig struct {
 	Readers    map[string]reader   `json:"readers"`
 }
 
-func parseAuth(raw string) (authConfig, error) {
-	var auth authConfig
-	if err := json.Unmarshal([]byte(raw), &auth); err != nil {
-		return authConfig{}, errors.New("DUBHE_TRACING_AUTH must contain valid credential configuration")
+// ParseLegacyAuth supports the JSON environment configuration used by earlier builds.
+func ParseLegacyAuth(raw string) (AuthConfig, error) {
+	var legacy authConfig
+	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
+		return AuthConfig{}, errors.New("DUBHE_TRACING_AUTH must contain valid credential configuration")
+	}
+	var config AuthConfig
+	for token, entry := range legacy.Workloads {
+		entry.Token = token
+		config.Workloads = append(config.Workloads, entry)
+	}
+	for token, entry := range legacy.Registrars {
+		entry.Token = token
+		config.Registrars = append(config.Registrars, entry)
+	}
+	for token, entry := range legacy.Readers {
+		entry.Token = token
+		config.Readers = append(config.Readers, entry)
+	}
+	return config, nil
+}
+
+func validateAuth(config AuthConfig) (authConfig, error) {
+	auth := authConfig{
+		Workloads:  make(map[string]workload),
+		Registrars: make(map[string]workload),
+		Readers:    make(map[string]reader),
 	}
 	tokens := make(map[string]bool)
 	checkToken := func(token string) bool {
@@ -55,15 +89,23 @@ func parseAuth(raw string) (authConfig, error) {
 		tokens[token] = true
 		return true
 	}
-	for _, identities := range []map[string]workload{auth.Workloads, auth.Registrars} {
-		for token, identity := range identities {
-			if !checkToken(token) || !identity.Scope.valid() || !opaqueID(identity.ProducerID) {
-				return authConfig{}, errors.New("invalid workload or registration credential configuration")
+	addWorkloads := func(entries []WorkloadCredential, identities map[string]workload) error {
+		for _, identity := range entries {
+			if !checkToken(identity.Token) || !identity.Scope.valid() || !opaqueID(identity.ProducerID) {
+				return errors.New("invalid workload or registration credential configuration")
 			}
+			identities[identity.Token] = identity
 		}
+		return nil
 	}
-	for token, identity := range auth.Readers {
-		if !checkToken(token) || !identity.Scope.valid() {
+	if err := addWorkloads(config.Workloads, auth.Workloads); err != nil {
+		return authConfig{}, err
+	}
+	if err := addWorkloads(config.Registrars, auth.Registrars); err != nil {
+		return authConfig{}, err
+	}
+	for _, identity := range config.Readers {
+		if !checkToken(identity.Token) || !identity.Scope.valid() {
 			return authConfig{}, errors.New("invalid reader credential configuration")
 		}
 		for _, id := range identity.AgentIDs {
@@ -71,6 +113,7 @@ func parseAuth(raw string) (authConfig, error) {
 				return authConfig{}, errors.New("invalid reader Agent grant")
 			}
 		}
+		auth.Readers[identity.Token] = identity
 	}
 	return auth, nil
 }
@@ -98,8 +141,8 @@ type service struct {
 	auth       authConfig
 }
 
-func NewHandler(writeDB, readDB *sql.DB, rawAuth string) (http.Handler, error) {
-	auth, err := parseAuth(rawAuth)
+func NewHandler(writeDB, readDB *gorm.DB, config AuthConfig) (http.Handler, error) {
+	auth, err := validateAuth(config)
 	if err != nil {
 		return nil, err
 	}

@@ -226,8 +226,8 @@ async def stream_turn(turn, inputs, send_chunk, existing_config=None):
 ### TypeScript
 
 ```ts
-import { createTracingSdk } from 'dubhe'
-import { LangChainTracing } from 'dubhe/langchain'
+import { createTracingSdk } from '@lipaotech/dubhe'
+import { LangChainTracing } from '@lipaotech/dubhe/langchain'
 
 const langchainTracing = new LangChainTracing(createTracingSdk(tracingOptions))
 

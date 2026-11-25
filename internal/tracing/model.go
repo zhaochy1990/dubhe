@@ -12,9 +12,9 @@ import (
 )
 
 type Scope struct {
-	TenantID      string `json:"tenant_id"`
-	EnvironmentID string `json:"environment_id"`
-	ProjectID     string `json:"project_id"`
+	TenantID      string `json:"tenant_id" mapstructure:"tenant_id"`
+	EnvironmentID string `json:"environment_id" mapstructure:"environment_id"`
+	ProjectID     string `json:"project_id" mapstructure:"project_id"`
 }
 
 func (s Scope) valid() bool {

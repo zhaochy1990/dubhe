@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -13,59 +12,58 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/spf13/pflag"
 	"github.com/zhaochy1990/dubhe/internal/tracing"
-	tracingschema "github.com/zhaochy1990/dubhe/src/dubhe"
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(os.Args[1:]); err != nil && !errors.Is(err, pflag.ErrHelp) {
 		log.Fatal(err)
 	}
 }
 
-func openMySQL(dsn, name string) (*sql.DB, error) {
-	db, err := sql.Open("mysql", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("%s is invalid", name)
-	}
-	return db, nil
-}
-
-func run() error {
-	dsn := os.Getenv("DUBHE_MYSQL_DSN")
-	if dsn == "" {
-		return errors.New("DUBHE_MYSQL_DSN is required")
-	}
-	db, err := openMySQL(dsn, "DUBHE_MYSQL_DSN")
+func run(args []string) error {
+	cfg, err := loadConfig(args)
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	profile, err := cfg.databaseProfile()
+	if err != nil {
+		return err
+	}
+	startup, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	db, err := tracing.OpenDatabase(startup, cfg.Database.Driver, profile.DSN)
+	if err != nil {
+		return fmt.Errorf("open write database: %w", err)
+	}
+	pool, err := db.DB()
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
 	readDB := db
-	if readDSN := os.Getenv("DUBHE_MYSQL_READ_DSN"); readDSN != "" {
-		readDB, err = openMySQL(readDSN, "DUBHE_MYSQL_READ_DSN")
+	if profile.ReadDSN != "" {
+		readDB, err = tracing.OpenDatabase(startup, cfg.Database.Driver, profile.ReadDSN)
+		if err != nil {
+			return fmt.Errorf("open read database: %w", err)
+		}
+		readPool, err := readDB.DB()
 		if err != nil {
 			return err
 		}
-		defer readDB.Close()
+		defer readPool.Close()
 	}
-	handler, err := tracing.NewHandler(db, readDB, os.Getenv("DUBHE_TRACING_AUTH"))
+	handler, err := tracing.NewHandler(db, readDB, cfg.Auth)
 	if err != nil {
 		return err
 	}
-
-	startup, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	err = tracingschema.Initialize(startup, db)
-	cancel()
-	if err != nil {
+	if err := tracing.InitializeDatabase(startup, db); err != nil {
 		return fmt.Errorf("initialize tracing schema: %w", err)
 	}
-	address := os.Getenv("DUBHE_LISTEN")
-	if address == "" {
-		address = "127.0.0.1:8080"
-	}
-	listener, err := net.Listen("tcp", address)
+	cancel()
+	listener, err := net.Listen("tcp", cfg.Server.Listen)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}

@@ -1,5 +1,5 @@
 {
-  "name": "dubhe",
+  "name": "@lipaotech/dubhe",
   "version": "0.1.0",
   "description": "Dubhe tracing for native LangChain agents",
   "type": "module",
@@ -27,7 +27,6 @@
     "@langchain/langgraph": "^1.7.5",
     "@types/node": "^24.0.0",
     "langchain": "^1.6.8",
-    "mysql2": "^3.15.0",
     "protobufjs": "^7.5.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0"

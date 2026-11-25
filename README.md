@@ -1,26 +1,24 @@
 # Dubhe
 
-Dubhe 为 LangChain Agent 提供 Tracing。TypeScript SDK 通过 LangChain callback 记录运行和模型 Span，Go 服务接收 OTLP/HTTP 数据，在 MySQL InnoDB 提交后确认。Trace 和 Span 查询校验租户、环境、项目及 Agent 权限。
+Dubhe 为 LangChain Agent 提供 Tracing。TypeScript SDK `@lipaotech/dubhe` 通过 LangChain callback 记录运行和模型 Span。Go 服务接收 OTLP/HTTP 数据，在数据库事务提交后确认，并按租户、环境、项目及 Agent 授权查询。服务支持 MySQL InnoDB 和本地 SQLite 文件。
 
 ## TypeScript 和 Go 端到端验收
 
-准备 Node.js 24、Go 1.26 或更新版本，以及 Docker。验收入口在仓库根目录。
+准备 Node.js 24、Go 1.26 或更新版本和 C 编译器（SQLite 驱动使用 CGO）。验收入口在仓库根目录。
 
 ```sh
 ./scripts/test-tracing-v1.sh
 ```
 
-脚本启动 MySQL 8.4 和真实 Go HTTP 服务，构建 TypeScript 包并执行验收用例。模型由测试控制，无需供应商凭据。脚本退出时会停止启动的服务和数据库容器。
-
-如已有专用测试库，可同时设置 `DUBHE_TEST_MYSQL_DSN`（Go MySQL DSN）和 `DUBHE_TEST_MYSQL_URL`（`mysql://` URL）。可通过 `GO` 指定 Go 工具链路径。
+脚本先执行 Go API 测试，再用临时 SQLite 文件启动真实 Go HTTP 服务、构建 TypeScript 包并执行端到端验收。模型由测试控制，无需供应商凭据。Go 测试通过 `t.TempDir()` 清理各自的数据库，脚本退出时删除端到端验收的临时文件。CI 可以直接执行 `go test ./...` 或运行完整脚本。可通过 `GO` 指定 Go 工具链路径。
 
 ### 接入 TypeScript Agent
 
 在应用启动时创建一次 SDK。可信宿主的 `prepareRun` 按作用域、Session 和轮次原子认领 Trace，并持久保存绑定。SDK 使用独立的登记身份和上报身份，在可信登记提交后发送已结束的 Span。
 
 ```typescript
-import { createHttpRunRegistration, createTracingSdk } from "dubhe";
-import { LangChainTracing } from "dubhe/langchain";
+import { createHttpRunRegistration, createTracingSdk } from "@lipaotech/dubhe";
+import { LangChainTracing } from "@lipaotech/dubhe/langchain";
 
 const sdk = createTracingSdk({
   scope,
@@ -47,9 +45,16 @@ try {
 
 ### 运行 Go Tracing 服务
 
-`go run ./cmd/dubhe-tracing` 读取 `DUBHE_MYSQL_DSN`、`DUBHE_LISTEN` 和 `DUBHE_TRACING_AUTH`。鉴权配置提供 `workloads`、`registrars` 和 `readers` 三类服务端身份。各身份绑定 `scope`，上报和登记身份还绑定 `producer_id`，读身份包含 `agent_ids`。验收脚本包含本地静态 Token 配置示例。
+服务用 Viper 加载 YAML 配置，`--database-driver` 可在启动时选择 `sqlite` 或 `mysql`。[示例配置](config.example.yaml)
 
-部署时通过 `DUBHE_MYSQL_READ_DSN` 为查询配置同库的独立连接池，使用仅对 Tracing 查询表有 `SELECT` 权限的 MySQL 账号。仅使用 `DUBHE_MYSQL_DSN` 时，读写共享连接池。
+```sh
+go run ./cmd/dubhe-tracing --config config.example.yaml --database-driver sqlite
+go run ./cmd/dubhe-tracing --config config.yaml --database-driver mysql
+```
+
+数据库连接取自 `database.sqlite` 或 `database.mysql`。其中 `dsn` 用于写入，可选的 `read_dsn` 为查询配置同库的独立连接池。MySQL 查询账号可仅授予 `SELECT` 权限。配置优先级由高到低为命令行、环境变量和 YAML。可用 `DUBHE_DATABASE_DRIVER`、`DUBHE_LISTEN`、`DUBHE_SQLITE_DSN`、`DUBHE_MYSQL_DSN` 及对应的 `READ_DSN` 环境变量覆盖配置。`DUBHE_TRACING_AUTH` 仍接受旧版 JSON 鉴权配置。
+
+YAML 的 `auth` 配置提供 `workloads`、`registrars` 和 `readers` 三类服务端身份。各身份绑定 `scope`，上报和登记身份还绑定 `producer_id`，读身份包含 `agent_ids`。将示例中的 Token 替换为自己的凭据。
 
 - `POST /internal/v1/observability/runs` 接受可信入口使用独立内部凭据提交的轮次绑定。
 - `POST /v1/traces` 接受以工作负载身份鉴权的 OTLP/HTTP 二进制 Protobuf 批次，支持 gzip。

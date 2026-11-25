@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { addAbortListener } from 'node:events';
 import { test } from 'node:test';
-import { createHttpRunRegistration } from 'dubhe';
+import { createHttpRunRegistration } from '@lipaotech/dubhe';
 import { createAgent } from 'langchain';
 import { answer, assertTrace, baseUrl, inputs, newTurn, readTrace, setup, TestModel } from './support.js';
 

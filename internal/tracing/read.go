@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
 type traceView struct {
@@ -42,11 +44,12 @@ type nodeDetail struct {
 
 func scanNode(row interface{ Scan(...any) error }) (nodeView, error) {
 	var view nodeView
-	var spanID, traceID, parent []byte
+	var spanID, traceID, parent, metadata []byte
 	if err := row.Scan(&spanID, &traceID, &parent, &view.ProducerID, &view.AgentID, &view.Kind,
-		&view.StartNS, &view.EndNS, &view.Status, &view.Metadata); err != nil {
+		&view.StartNS, &view.EndNS, &view.Status, &metadata); err != nil {
 		return nodeView{}, err
 	}
+	view.Metadata = metadata
 	view.TraceID = hex.EncodeToString(traceID)
 	view.SpanID = hex.EncodeToString(spanID)
 	view.NodeID = "span:" + view.SpanID
@@ -61,48 +64,43 @@ func (s store) trace(ctx context.Context, reader reader, traceID []byte) (*trace
 	if len(reader.AgentIDs) == 0 {
 		return nil, nil
 	}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-
-	args := appendAgents(append(reader.Scope.args(), traceID), reader.AgentIDs)
-	agents := agentPlaceholders(len(reader.AgentIDs))
-	view := traceView{Scope: reader.Scope, TraceID: hex.EncodeToString(traceID), Nodes: []nodeView{}}
-	err = tx.QueryRowContext(ctx, `
-		SELECT session_id, turn_id, root_agent_id, start_ns, end_ns, run_state FROM tracing_traces
-		WHERE `+scopeWhere+` AND trace_id = ? AND root_agent_id IN (`+agents+`)`, args...).
-		Scan(&view.SessionID, &view.TurnID, &view.RootAgent, &view.StartNS, &view.EndNS, &view.RunState)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	rows, err := tx.QueryContext(ctx, `
-		SELECT span_id, trace_id, parent_span_id, producer_id, agent_id, kind, start_ns, end_ns, status, metadata
-		FROM tracing_spans WHERE `+scopeWhere+` AND trace_id = ? AND agent_id IN (`+agents+`)
-		ORDER BY start_ns, span_id`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		node, err := scanNode(rows)
-		if err != nil {
-			return nil, err
+	var result *traceView
+	err := s.readTransaction(ctx, func(tx *gorm.DB) error {
+		args := appendAgents(append(reader.Scope.args(), traceID), reader.AgentIDs)
+		agents := agentPlaceholders(len(reader.AgentIDs))
+		view := traceView{Scope: reader.Scope, TraceID: hex.EncodeToString(traceID), Nodes: []nodeView{}}
+		err := tx.Raw(`SELECT session_id, turn_id, root_agent_id, start_ns, end_ns, run_state FROM tracing_traces
+			WHERE `+scopeWhere+` AND trace_id = ? AND root_agent_id IN (`+agents+`)`, args...).Row().
+			Scan(&view.SessionID, &view.TurnID, &view.RootAgent, &view.StartNS, &view.EndNS, &view.RunState)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
 		}
-		view.Nodes = append(view.Nodes, node)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return &view, nil
+		if err != nil {
+			return err
+		}
+
+		rows, err := tx.Raw(`SELECT span_id, trace_id, parent_span_id, producer_id, agent_id, kind,
+			start_ns, end_ns, status, metadata FROM tracing_spans
+			WHERE `+scopeWhere+` AND trace_id = ? AND agent_id IN (`+agents+`)
+			ORDER BY start_ns, span_id`, args...).Rows()
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			node, err := scanNode(rows)
+			if err != nil {
+				return err
+			}
+			view.Nodes = append(view.Nodes, node)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		result = &view
+		return nil
+	})
+	return result, err
 }
 
 func (s store) node(ctx context.Context, reader reader, spanID, expectedTraceID []byte) (*nodeDetail, error) {
@@ -125,7 +123,7 @@ func (s store) node(ctx context.Context, reader reader, spanID, expectedTraceID 
 		query += " AND s.trace_id = ?"
 		args = append(args, expectedTraceID)
 	}
-	view, err := scanNode(s.db.QueryRowContext(ctx, query, args...))
+	view, err := scanNode(s.db.WithContext(ctx).Raw(query, args...).Row())
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

@@ -12,8 +12,8 @@ import {
   type TracingOptions,
   type VerifiedRun,
   type VerifiedTurn,
-} from 'dubhe';
-import { LangChainTracing } from 'dubhe/langchain';
+} from '@lipaotech/dubhe';
+import { LangChainTracing } from '@lipaotech/dubhe/langchain';
 
 export const scope = {
   tenantId: 'tenant-alpha',

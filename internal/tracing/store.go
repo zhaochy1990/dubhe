@@ -6,75 +6,78 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const scopeWhere = "tenant_id = ? AND environment_id = ? AND project_id = ?"
 
 type store struct {
-	db *sql.DB
+	db *gorm.DB
 }
 
 var errRegistrationConflict = errors.New("trusted run registration conflicts with an existing binding")
 
+func insertIfMissing(tx *gorm.DB, scope Scope, table, key string, values map[string]any) error {
+	values["tenant_id"] = scope.TenantID
+	values["environment_id"] = scope.EnvironmentID
+	values["project_id"] = scope.ProjectID
+	column := clause.Column{Name: key}
+	return tx.Table(table).Clauses(clause.OnConflict{
+		DoNothing: true,
+		// MySQL implements the no-op with an assignment to the existing row.
+		DoUpdates: clause.Set{{Column: column, Value: column}},
+	}).Create(values).Error
+}
+
 func (s store) register(ctx context.Context, run registration) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := insertIfMissing(tx, run.Scope, "tracing_sessions", "session_id", map[string]any{
+			"session_id": run.SessionID, "root_agent_id": run.RootAgentID, "started_at_ns": s.timestamp(run.SessionStartedAt),
+		}); err != nil {
+			return err
+		}
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO tracing_sessions
-			(tenant_id, environment_id, project_id, session_id, root_agent_id, started_at_ns)
-		VALUES (?, ?, ?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE session_id = session_id`,
-		append(run.Scope.args(), run.SessionID, run.RootAgentID, run.SessionStartedAt)...)
-	if err != nil {
-		return err
-	}
-	var sessionAgent string
-	var startedAt uint64
-	err = tx.QueryRowContext(ctx, `
-		SELECT root_agent_id, started_at_ns FROM tracing_sessions
-		WHERE `+scopeWhere+` AND session_id = ? FOR UPDATE`,
-		append(run.Scope.args(), run.SessionID)...).Scan(&sessionAgent, &startedAt)
-	if err != nil {
-		return err
-	}
-	if sessionAgent != run.RootAgentID || startedAt != run.SessionStartedAt {
-		return errRegistrationConflict
-	}
+		var sessionAgent string
+		var startedAt uint64
+		err := lockedRow(tx, `SELECT root_agent_id, started_at_ns FROM tracing_sessions
+			WHERE `+scopeWhere+` AND session_id = ?`, append(run.Scope.args(), run.SessionID)...).
+			Scan(&sessionAgent, &startedAt)
+		if err != nil {
+			return err
+		}
+		if sessionAgent != run.RootAgentID || startedAt != run.SessionStartedAt {
+			return errRegistrationConflict
+		}
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO tracing_traces
-			(tenant_id, environment_id, project_id, trace_id, session_id, turn_id, root_span_id,
-			 root_producer_id, root_agent_id, registered_at_ns, accept_until_ns)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE trace_id = trace_id`,
-		append(run.Scope.args(), run.TraceID, run.SessionID, run.TurnID, []byte(run.RootSpanID),
-			run.RootProducerID, run.RootAgentID, run.RegisteredAt, run.AcceptUntil)...)
-	if err != nil {
-		return err
-	}
+		if err := insertIfMissing(tx, run.Scope, "tracing_traces", "trace_id", map[string]any{
+			"trace_id": run.TraceID, "session_id": run.SessionID, "turn_id": run.TurnID,
+			"root_span_id": []byte(run.RootSpanID), "root_producer_id": run.RootProducerID,
+			"root_agent_id": run.RootAgentID, "registered_at_ns": s.timestamp(run.RegisteredAt),
+			"accept_until_ns": s.timestamp(run.AcceptUntil),
+		}); err != nil {
+			return err
+		}
 
-	var existing runBinding
-	err = tx.QueryRowContext(ctx, `
-		SELECT session_id, turn_id, root_span_id, root_producer_id, root_agent_id,
+		var existing runBinding
+		err = lockedRow(tx, `SELECT session_id, turn_id, root_span_id, root_producer_id, root_agent_id,
 			registered_at_ns, accept_until_ns FROM tracing_traces
-		WHERE `+scopeWhere+` AND trace_id = ? FOR UPDATE`, append(run.Scope.args(), run.TraceID)...).
-		Scan(&existing.SessionID, &existing.TurnID, &existing.RootSpanID, &existing.RootProducerID,
-			&existing.RootAgentID, &existing.RegisteredAt, &existing.AcceptUntil)
-	// A conflict on (session_id, turn_id) can leave no row for this trace_id.
-	if errors.Is(err, sql.ErrNoRows) {
-		return errRegistrationConflict
-	}
-	if err != nil {
-		return err
-	}
-	if existing != run.runBinding {
-		return errRegistrationConflict
-	}
-	return tx.Commit()
+			WHERE `+scopeWhere+` AND trace_id = ?`, append(run.Scope.args(), run.TraceID)...).
+			Scan(&existing.SessionID, &existing.TurnID, &existing.RootSpanID, &existing.RootProducerID,
+				&existing.RootAgentID, &existing.RegisteredAt, &existing.AcceptUntil)
+		// A conflict on (session_id, turn_id) can leave no row for this trace_id.
+		if errors.Is(err, sql.ErrNoRows) {
+			return errRegistrationConflict
+		}
+		if err != nil {
+			return err
+		}
+		if existing != run.runBinding {
+			return errRegistrationConflict
+		}
+		return nil
+	})
 }
 
 type spanGrant struct {
@@ -95,49 +98,45 @@ func (g spanGrant) permits(span spanRecord, producer string, now uint64) bool {
 }
 
 func (s store) ingest(ctx context.Context, workload workload, spans []spanRecord) (int64, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-
 	now, _ := unixNano(time.Now())
 	grants := make(map[string]spanGrant)
 	var rejected int64
-	for _, span := range spans {
-		traceKey := string(span.TraceID)
-		grant, loaded := grants[traceKey]
-		if !loaded {
-			err := tx.QueryRowContext(ctx, `
-				SELECT root_span_id, root_producer_id, root_agent_id, accept_until_ns
-				FROM tracing_traces WHERE `+scopeWhere+` AND trace_id = ? FOR UPDATE`,
-				append(workload.Scope.args(), span.TraceID)...).
-				Scan(&grant.rootSpanID, &grant.producerID, &grant.agentID, &grant.acceptBy)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return 0, err
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, span := range spans {
+			traceKey := string(span.TraceID)
+			grant, loaded := grants[traceKey]
+			if !loaded {
+				err := lockedRow(tx, `SELECT root_span_id, root_producer_id, root_agent_id, accept_until_ns
+					FROM tracing_traces WHERE `+scopeWhere+` AND trace_id = ?`,
+					append(workload.Scope.args(), span.TraceID)...).
+					Scan(&grant.rootSpanID, &grant.producerID, &grant.agentID, &grant.acceptBy)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+				grants[traceKey] = grant
 			}
-			grants[traceKey] = grant
+			if !grant.permits(span, workload.ProducerID, now) {
+				rejected++
+				continue
+			}
+			equivalent, err := s.persistSpan(tx, workload, span)
+			if err != nil {
+				return err
+			}
+			if !equivalent {
+				rejected++
+			}
 		}
-		if !grant.permits(span, workload.ProducerID, now) {
-			rejected++
-			continue
-		}
-		equivalent, err := persistSpan(ctx, tx, workload, span)
-		if err != nil {
-			return 0, err
-		}
-		if !equivalent {
-			rejected++
-		}
-	}
-	return rejected, tx.Commit()
+		return nil
+	})
+	return rejected, err
 }
 
-func persistSpan(ctx context.Context, tx *sql.Tx, workload workload, span spanRecord) (bool, error) {
+func (s store) persistSpan(tx *gorm.DB, workload workload, span spanRecord) (bool, error) {
 	metadata := "{}"
-	var outcome sql.NullString
+	var outcome any
 	if span.Outcome != "" {
-		outcome = sql.NullString{String: span.Outcome, Valid: true}
+		outcome = span.Outcome
 		// Run outcomes have already been validated against a fixed set of values.
 		metadata = `{"run_outcome":"` + span.Outcome + `"}`
 	}
@@ -145,24 +144,21 @@ func persistSpan(ctx context.Context, tx *sql.Tx, workload workload, span spanRe
 	if len(span.ParentID) != 0 {
 		parent = span.ParentID
 	}
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO tracing_spans
-			(tenant_id, environment_id, project_id, span_id, trace_id, parent_span_id, producer_id,
-			 agent_id, kind, start_ns, end_ns, status, metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE span_id = span_id`,
-		append(workload.Scope.args(), span.SpanID, span.TraceID, parent, workload.ProducerID,
-			span.AgentID, span.Kind, span.StartNS, span.EndNS, span.Status, metadata)...)
-	if err != nil {
+	start := s.timestamp(span.StartNS)
+	end := s.timestamp(span.EndNS)
+	if err := insertIfMissing(tx, workload.Scope, "tracing_spans", "span_id", map[string]any{
+		"span_id": span.SpanID, "trace_id": span.TraceID, "parent_span_id": parent, "producer_id": workload.ProducerID,
+		"agent_id": span.AgentID, "kind": span.Kind, "start_ns": start, "end_ns": end,
+		"status": span.Status, "metadata": metadata,
+	}); err != nil {
 		return false, err
 	}
+
 	var existing spanRecord
 	var producer string
 	var storedMetadata []byte
-	err = tx.QueryRowContext(ctx, `
-		SELECT trace_id, parent_span_id, producer_id, agent_id, kind, start_ns, end_ns, status, metadata
-		FROM tracing_spans WHERE `+scopeWhere+` AND span_id = ? FOR UPDATE`,
-		append(workload.Scope.args(), span.SpanID)...).
+	err := lockedRow(tx, `SELECT trace_id, parent_span_id, producer_id, agent_id, kind, start_ns, end_ns, status, metadata
+		FROM tracing_spans WHERE `+scopeWhere+` AND span_id = ?`, append(workload.Scope.args(), span.SpanID)...).
 		Scan(&existing.TraceID, &existing.ParentID, &producer, &existing.AgentID, &existing.Kind,
 			&existing.StartNS, &existing.EndNS, &existing.Status, &storedMetadata)
 	if err != nil {
@@ -178,11 +174,9 @@ func persistSpan(ctx context.Context, tx *sql.Tx, workload workload, span spanRe
 		return false, nil
 	}
 	if span.Kind == "run" {
-		_, err := tx.ExecContext(ctx, `
-			UPDATE tracing_traces SET start_ns = ?, end_ns = ?, run_state = ?
-			WHERE `+scopeWhere+` AND trace_id = ?`,
-			append([]any{span.StartNS, span.EndNS, outcome},
-				append(workload.Scope.args(), span.TraceID)...)...)
+		err := tx.Table("tracing_traces").
+			Where(scopeWhere+" AND trace_id = ?", append(workload.Scope.args(), span.TraceID)...).
+			Updates(map[string]any{"start_ns": start, "end_ns": end, "run_state": outcome}).Error
 		if err != nil {
 			return false, err
 		}

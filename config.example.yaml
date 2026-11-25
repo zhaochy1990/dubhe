@@ -1,0 +1,25 @@
+server:
+  listen: "127.0.0.1:8080"
+
+database:
+  driver: sqlite
+  sqlite:
+    dsn: "./dubhe.db"
+  mysql:
+    dsn: "dubhe:change-me@tcp(127.0.0.1:3306)/dubhe"
+    # read_dsn: "dubhe_reader:change-me@tcp(127.0.0.1:3306)/dubhe"
+
+# Replace the sample tokens when configuring your own service.
+auth:
+  workloads:
+    - token: "local-workload-token"
+      scope: &scope {tenant_id: "tenant-alpha", environment_id: "staging", project_id: "support"}
+      producer_id: "agent-worker"
+  registrars:
+    - token: "local-registration-token"
+      scope: *scope
+      producer_id: "agent-worker"
+  readers:
+    - token: "local-reader-token"
+      scope: *scope
+      agent_ids: ["support-agent"]
