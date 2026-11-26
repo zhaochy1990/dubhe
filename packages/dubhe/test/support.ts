@@ -157,7 +157,7 @@ export interface Node {
   status: number;
 }
 
-interface Trace {
+export interface Trace {
   trace_id: string;
   session_id: string;
   turn_id: string;

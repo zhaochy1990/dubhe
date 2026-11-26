@@ -148,49 +148,80 @@ func (s store) putContent(tx *gorm.DB, scope Scope, traceID []byte, id string, c
 	})
 }
 
-func (s store) readContent(tx *gorm.DB, reader authenticatedIdentity, traceID []byte, id string, base json.RawMessage) (json.RawMessage, error) {
-	if s.policy.scopes[reader.Scope].contentDays == 0 || (!reader.ModelInput && !reader.ToolParameters) {
-		return base, nil
+func (s store) readContent(tx *gorm.DB, reader authenticatedIdentity, traceID []byte, node nodeView) (json.RawMessage, string, error) {
+	var allowed bool
+	switch node.Kind {
+	case "llm":
+		allowed = reader.ModelInput
+	case "tool":
+		allowed = reader.ToolParameters
+	default:
+		return node.Metadata, "", nil
 	}
-	now := time.Now()
-	ns, _ := unixNano(now)
-	args := append(reader.Scope.args(), traceID, id, s.timestamp(ns))
+	if !allowed {
+		return node.Metadata, "forbidden", nil
+	}
+	if s.policy.scopes[reader.Scope].contentDays == 0 {
+		return node.Metadata, "not_captured", nil
+	}
+	now, _ := unixNano(time.Now())
+	args := append([]any{s.timestamp(now), node.NodeID}, reader.Scope.args()...)
+	args = append(args, traceID)
+	var deadline uint64
+	var captured bool
 	var payload []byte
-	err := tx.Raw(`SELECT c.payload FROM tracing_content c JOIN tracing_trace_content p ON `+
+	err := tx.Raw(`SELECT p.expires_at_ns, c.object_id IS NOT NULL,
+		CASE WHEN p.expires_at_ns > ? THEN c.payload END
+		FROM tracing_trace_content p LEFT JOIN tracing_content c ON `+
 		scopeJoin("c", "p")+` AND c.trace_id = p.trace_id
-		WHERE c.tenant_id = ? AND c.environment_id = ? AND c.project_id = ? AND c.trace_id = ?
-		AND c.object_id = ? AND p.expires_at_ns > ?`, args...).Row().Scan(&payload)
+		AND c.object_id = ?
+		WHERE p.tenant_id = ? AND p.environment_id = ? AND p.project_id = ? AND p.trace_id = ?`, args...).Row().Scan(&deadline, &captured, &payload)
 	if errors.Is(err, sql.ErrNoRows) {
-		return base, nil
+		return node.Metadata, "not_captured", nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
+	}
+	if !captured {
+		return node.Metadata, "not_captured", nil
+	}
+	if deadline <= now {
+		return node.Metadata, "expired", nil
 	}
 	var metadata, content map[string]json.RawMessage
-	if err := json.Unmarshal(base, &metadata); err != nil {
-		return nil, err
+	if err := json.Unmarshal(node.Metadata, &metadata); err != nil {
+		return nil, "", err
 	}
 	if err := json.Unmarshal(payload, &content); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	for key, value := range content {
-		switch key {
-		case "messages", "system_instructions", "tool_definitions":
-			if reader.ModelInput {
-				metadata[key] = value
-			}
-		case "parameters":
-			if reader.ToolParameters {
-				metadata[key] = value
-			}
+	if len(content) == 0 {
+		return node.Metadata, "expired", nil
+	}
+	for _, key := range contentKeys(node.Kind) {
+		if value, exists := content[key]; exists {
+			metadata[key] = value
 		}
 	}
-	return json.Marshal(metadata)
+	data, err := json.Marshal(metadata)
+	return data, "available", err
 }
 
-// PurgeContent removes expired or disabled content. Deleting the policy row
-// also removes its payloads and retains the original registered Trace as a
-// marker. Registration and delivery retries cannot recreate the policy row.
+func contentKeys(kind string) []string {
+	switch kind {
+	case "llm":
+		return []string{"messages", "system_instructions", "tool_definitions"}
+	case "tool":
+		return []string{"parameters"}
+	default:
+		return nil
+	}
+}
+
+// PurgeContent clears expired payloads, keeping their object IDs and deadline
+// until the Trace expires so readers can distinguish expired and absent content.
+// Removing a disabled or no longer readable policy cascades to its payloads.
+// Retries cannot reopen a capture window.
 func PurgeContent(ctx context.Context, db *gorm.DB, options Options) error {
 	policy, err := compilePolicies(options)
 	if err != nil {
@@ -199,10 +230,10 @@ func PurgeContent(ctx context.Context, db *gorm.DB, options Options) error {
 	s := store{db: db, policy: policy}
 	now := time.Now()
 	ns, _ := unixNano(now)
-	query := `DELETE FROM tracing_trace_content WHERE expires_at_ns <= ? OR EXISTS (
+	query := `DELETE FROM tracing_trace_content WHERE EXISTS (
 		SELECT 1 FROM tracing_traces t WHERE ` + scopeJoin("t", "tracing_trace_content") + `
 		AND t.trace_id = tracing_trace_content.trace_id AND t.registered_at_ns <= ?)`
-	args := []any{s.timestamp(ns), s.cutoff(now)}
+	args := []any{s.cutoff(now)}
 	var enabled []string
 	for scope, entry := range policy.scopes {
 		if entry.contentDays != 0 {
@@ -216,7 +247,16 @@ func PurgeContent(ctx context.Context, db *gorm.DB, options Options) error {
 	} else {
 		query += " OR NOT (" + strings.Join(enabled, " OR ") + ")"
 	}
-	if err := db.WithContext(ctx).Exec(query, args...).Error; err != nil {
+	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(query, args...).Error; err != nil {
+			return err
+		}
+		return tx.Exec(`UPDATE tracing_content SET payload = '{}'
+			WHERE CAST(payload AS CHAR) <> '{}' AND EXISTS (
+			SELECT 1 FROM tracing_trace_content p WHERE `+scopeJoin("p", "tracing_content")+`
+			AND p.trace_id = tracing_content.trace_id AND p.expires_at_ns <= ?)`, s.timestamp(ns)).Error
+	})
+	if err != nil {
 		return fmt.Errorf("purge Tracing content: %w", err)
 	}
 	return nil

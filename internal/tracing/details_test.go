@@ -9,43 +9,35 @@ import (
 	"time"
 
 	common "go.opentelemetry.io/proto/otlp/common/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestModelDetailsAndContentPermission(t *testing.T) {
 	for _, scenario := range []struct {
 		name    string
 		enabled bool
-		age     time.Duration
+		expires bool
 	}{
 		{name: "enabled", enabled: true},
 		{name: "disabled"},
-		{name: "expired", enabled: true, age: 48 * time.Hour},
+		{name: "expired", enabled: true, expires: true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
-			testModelDetails(t, scenario.enabled, scenario.age)
+			testModelDetails(t, scenario.enabled, scenario.expires)
 		})
 	}
 }
 
-func testModelDetails(t *testing.T, enabled bool, age time.Duration) {
+func testModelDetails(t *testing.T, enabled, expires bool) {
 	policy := ScopePolicy{Scope: testScope, ModelCatalog: []ModelDisplay{{ID: "model-v1", Name: "test-model"}}}
 	if enabled {
 		policy.ContentDays = 1
 	}
-	server, _ := sqliteAPI(t, Options{Scopes: []ScopePolicy{policy}})
+	options := Options{Scopes: []ScopePolicy{policy}}
+	server, db := sqliteAPI(t, options)
 	traceID, rootID, modelID := bytes.Repeat([]byte{1}, 16), bytes.Repeat([]byte{2}, 8), bytes.Repeat([]byte{3}, 8)
-	var binding registrationRequest
-	if err := json.Unmarshal(registrationBody(t, traceID, rootID), &binding); err != nil {
-		t.Fatal(err)
-	}
-	binding.RegisteredAt = binding.RegisteredAt.Add(-age)
-	binding.SessionStartedAt = binding.SessionStartedAt.Add(-age)
-	body, err := json.Marshal(binding)
-	if err != nil {
-		t.Fatal(err)
-	}
 	request(t, server, http.MethodPost, "/internal/v1/observability/runs", "register", "application/json", "",
-		body, http.StatusNoContent)
+		registrationBody(t, traceID, rootID), http.StatusNoContent)
 	_, model := testSpans(traceID, rootID, modelID)
 	model.Attributes = append(model.Attributes,
 		&common.KeyValue{Key: "gen_ai.request.model", Value: &common.AnyValue{Value: &common.AnyValue_StringValue{StringValue: "test-model"}}},
@@ -53,7 +45,10 @@ func testModelDetails(t *testing.T, enabled bool, age time.Duration) {
 		&common.KeyValue{Key: "gen_ai.input.messages", Value: &common.AnyValue{Value: &common.AnyValue_StringValue{
 			StringValue: `[{"role":"user","parts":[{"type":"text","content":"private prompt"}]}]`}}},
 	)
-	exportSpans(t, server, false, http.StatusOK, model)
+	withoutInput := proto.CloneOf(model)
+	withoutInput.SpanId = bytes.Repeat([]byte{4}, 8)
+	withoutInput.Attributes = withoutInput.Attributes[:len(withoutInput.Attributes)-1]
+	exportSpans(t, server, false, http.StatusOK, model, withoutInput)
 	model.Attributes[len(model.Attributes)-1].Value = &common.AnyValue{Value: &common.AnyValue_StringValue{
 		StringValue: `[{"role":"user","parts":[{"type":"text","content":"replayed prompt"}]}]`,
 	}}
@@ -68,13 +63,45 @@ func testModelDetails(t *testing.T, enabled bool, age time.Duration) {
 	}
 	if !bytes.Contains(view.Metadata, []byte(`"output_tokens":0`)) ||
 		!bytes.Contains(view.Metadata, []byte(`"model_name":"test-model"`)) ||
+		!bytes.Contains(raw, []byte(`"content_state":"forbidden"`)) ||
 		bytes.Contains(raw, []byte("private prompt")) || bytes.Contains(raw, []byte("input_tokens")) {
 		t.Fatalf("unexpected model summary: %s", raw)
 	}
+	if expires {
+		// Advance the capture deadline without waiting for the retention period.
+		deadline, _ := unixNano(time.Now().Add(-time.Hour))
+		if err := db.Exec("UPDATE tracing_trace_content SET expires_at_ns = ?", (store{db: db}).timestamp(deadline)).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := PurgeContent(t.Context(), db, options); err != nil {
+		t.Fatal(err)
+	}
+	if expires {
+		var payload string
+		if err := db.Raw("SELECT payload FROM tracing_content WHERE object_id = ?", "span:"+hex.EncodeToString(modelID)).Row().Scan(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload != "{}" {
+			t.Fatal("purged content still has a payload")
+		}
+	}
+	state := "not_captured"
+	if enabled && !expires {
+		state = "available"
+	} else if enabled {
+		state = "expired"
+	}
 	raw = request(t, server, http.MethodGet, path, "query-content", "", "", nil, http.StatusOK)
-	if bytes.Contains(raw, []byte("private prompt")) != (enabled && age == 0) ||
+	if bytes.Contains(raw, []byte("private prompt")) != (enabled && !expires) ||
+		!bytes.Contains(raw, []byte(`"content_state":"`+state+`"`)) ||
 		bytes.Contains(raw, []byte("replayed prompt")) || !bytes.Contains(raw, []byte(`"output_tokens":0`)) {
 		t.Fatalf("unexpected content after replay: %s", raw)
+	}
+	path = "/v1/observability/nodes/span:" + hex.EncodeToString(withoutInput.SpanId) + "?" + scopeQuery
+	raw = request(t, server, http.MethodGet, path, "query-content", "", "", nil, http.StatusOK)
+	if !bytes.Contains(raw, []byte(`"content_state":"not_captured"`)) {
+		t.Fatalf("unexpected status for a Span that never captured inputs: %s", raw)
 	}
 }
 

@@ -52,7 +52,7 @@ auth:
   readers:
     - api_key: "content-reader"
       scope: *scope
-      agent_ids: ["support-agent", "orders-agent"]
+      agent_ids: ["support-agent", "orders-agent", "operations-agent"]
       model_input: true
       tool_parameters: true
     - api_key: "model-reader"
@@ -85,6 +85,7 @@ tracing:
       agents:
         - {id: "support-agent", name: "Customer Support"}
         - {id: "orders-agent", name: "Orders"}
+        - {id: "operations-agent", name: "International Customer Service Operations and Escalation Agent"}
       models:
         - {id: "fixture-v1", name: "provider-fixture"}
       tool_ids: ["orders.lookup", "orders.update", "local.echo"]

@@ -82,6 +82,7 @@ test('native invoke preserves callbacks and checkpoints and builds an authorized
       tenant_id: scope.tenantId,
       environment_id: scope.environmentId,
       project_id: scope.projectId,
+      ...(node.kind === 'llm' && { content_state: 'forbidden' }),
     });
   }
 

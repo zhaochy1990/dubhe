@@ -92,7 +92,8 @@ type nodeView struct {
 type nodeDetail struct {
 	Scope
 	nodeView
-	Audit []auditEvent `json:"audit,omitempty"`
+	ContentState string       `json:"content_state,omitempty"`
+	Audit        []auditEvent `json:"audit,omitempty"`
 }
 
 func scanNode(row interface{ Scan(...any) error }) (nodeView, error) {
@@ -361,11 +362,12 @@ func (s store) node(ctx context.Context, reader authenticatedIdentity, nodeID st
 			if node.NodeID != nodeID && (node.SpanID == "" || "span:"+node.SpanID != nodeID) {
 				continue
 			}
-			node.Metadata, err = s.readContent(tx, reader, traceID, node.NodeID, node.Metadata)
+			var contentState string
+			node.Metadata, contentState, err = s.readContent(tx, reader, traceID, node)
 			if err != nil {
 				return err
 			}
-			result = &nodeDetail{Scope: reader.Scope, nodeView: node}
+			result = &nodeDetail{Scope: reader.Scope, nodeView: node, ContentState: contentState}
 			if node.Kind == "tool" {
 				result.Audit, err = readAudit(tx, reader.Scope, strings.TrimPrefix(node.NodeID, "tool:"))
 			}

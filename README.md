@@ -66,14 +66,31 @@ YAML 的 `auth` 分别为 `workloads`、`registrars`、`gateways` 和 `readers` 
 - `POST /v1/traces` 接受以工作负载身份鉴权的 OTLP/HTTP 二进制 Protobuf 批次，支持 gzip。
 - `POST /internal/v1/observability/gateway-events` 接收网关 Outbox 的可信事件，提交后返回 204。网关发送每个调用的唯一 `event_id`、`call_id`、从可信绑定获得的 `trace_id`、已验证的可选 `span_id`、`agent_id`、`tool_id`、`sequence`、`type`、`occurred_at`、`decision`、`execution_state`、`policy_version` 和 `initiator`。首条决策可携带用于判定的 `parameters`。登记或前序事件尚未到达时返回可重试的 503。
 - `GET /v1/observability/tool-calls/{call_id}/trace` 返回可见网关调用的 Trace 和节点标识。
-- `GET /v1/observability/sessions` 返回会话、总数、Agent 选项和时间分布，支持 `from`、`to`、`agent_id`、`result`、`q`、`tz`、`limit` 和 `cursor`。时间参数使用 RFC 3339。
-- `GET /v1/observability/sessions/{session_id}/traces` 返回多轮 Trace 摘要，支持 `limit` 和 `cursor`。
+- `GET /v1/observability/sessions` 返回会话、总数、Agent 选项和时间分布，支持 `from`、`to`、`agent_id`、`result`、`q`、`tz`、`limit` 和 `cursor`。时间参数使用 RFC 3339。搜索匹配 Session ID 与 Agent 显示名，缺少显示名时匹配 Agent ID。
+- `GET /v1/observability/sessions/{session_id}/traces` 返回多轮 Trace 摘要，支持 `limit` 和 `cursor`。也可从 `GET /v1/observability/sessions/traces?session_id=…` 查询，适用于含 URL 路径特殊字符的 Session ID。
 - `GET /v1/observability/traces/{trace_id}` 返回 Trace 及其节点。节点支持 `limit` 和 `cursor`，并标记当前页尚未加载的可见父节点。
-- `GET /v1/observability/nodes/{node_id}` 返回 `span:{span_id}` 或 `tool:{call_id}` 的详情，可带 `expected_trace_id` 确认 Trace 归属。
+- `GET /v1/observability/nodes/{node_id}` 返回 `span:{span_id}` 或 `tool:{call_id}` 的详情，可带 `expected_trace_id` 确认 Trace 归属。模型和网关工具详情的 `content_state` 表示 `available`（可查看）、`not_captured`（无可用采集记录）、`forbidden`（无内容权限）或 `expired`（已采集内容过期）。`content_format=json_text` 将获授权的内容字段返回为格式化 JSON 文本，以保留大整数等精确值。旧版本已经清理且未保留内容标识的数据会显示为无可用采集记录。
 
 设置 `tracing.gateway_outboxes` 可拉取网关 Outbox。每个来源配置 `url`、`api_key`、`scope` 和 `source_id`。Tracing 向 `{url}/lease` 提交 `{"limit":32}`。网关返回 204 或包含 `deliveries` 的 JSON，每项包含 `lease_token`、`version: 1` 和 `event`。Tracing 提交投影后向 `{url}/ack` 发送 `{"lease_token":"…"}`，网关用 204 确认。只有网关观测时，首条事件可通过 `gateway_binding` 提供经过验证的 Session 与 Trace 登记时间。
 
 查询使用 `X-API-Key` 发送具有作用域和 Agent 权限的读身份凭据。详情和会话下的 Trace 列表须提供 `tenant_id`、`environment_id` 和 `project_id`。会话列表可直接使用读身份的完整作用域。
+
+### 部署 Tracing UI
+
+Go 服务在 `/tracing/` 提供页面。通过部署方已有的登录入口在同一来源代理 `/tracing/` 和 `/v1/observability/`。入口验证浏览器会话，清除客户端送来的 `X-API-Key` 和 `Authorization`，再根据当前身份的授权为上游查询附加相应的 Go 读凭据。登录入口可以用 HTTP 401 或 403 拒绝未获准的 API 请求。Go 对不可见或不存在的对象统一返回 404。读密钥由入口持有，Go 监听地址仅对受信调用方开放。浏览器使用部署方的登录会话发起同源查询。
+
+### MySQL 与浏览器验收
+
+启动专用 MySQL 8.4 测试库，可复用下文的 Docker 命令。安装 Playwright Chromium 后，运行已有验收脚本并启用浏览器用例。
+
+```sh
+npm --prefix packages/dubhe ci
+npm --prefix packages/dubhe exec -- playwright install chromium
+DUBHE_TEST_MYSQL_DSN='dubhe:dubhe@tcp(127.0.0.1:3306)/dubhe' \
+  DUBHE_TEST_BROWSER=1 ./scripts/test-tracing-v1.sh
+```
+
+可用 `DUBHE_TEST_CHROMIUM_PATH` 指定本机 Chromium。测试入口只绑定回环地址，在服务端附加读凭据。桌面和窄屏用例比较 SDK 写入的 Session、Trace 与 Span 在 API 和页面中的呈现。
 
 ## Python 参考实现
 
