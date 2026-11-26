@@ -1,0 +1,18 @@
+{
+  "packages": [
+    {
+      "name": "dubhe-tracing",
+      "paths": [
+        ".github/release-packages.json",
+        ".dockerignore",
+        "Dockerfile",
+        "go.mod",
+        "go.sum",
+        "cmd/dubhe-tracing/**",
+        "internal/tracing/**",
+        "src/dubhe/schema.go",
+        "src/dubhe/schema.sql"
+      ]
+    }
+  ]
+}

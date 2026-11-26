@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: tracing-image-${{ github.event_name }}-${{ github.sha }}
-  cancel-in-progress: false
+  group: tracing-image-${{ github.event_name == 'push' && github.ref_name || github.sha }}
+  queue: max
 
 jobs:
   image:
@@ -20,11 +20,36 @@ jobs:
     outputs:
       image_ref: ${{ steps.release.outputs.image_ref }}
       digest: ${{ steps.release.outputs.digest }}
+      packages: ${{ steps.plan.outputs.packages }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Read the latest published versions
+        if: github.event_name == 'push'
+        # A queued source commit can predate the previous run's version commit.
+        run: git show origin/master:versions.json > "$RUNNER_TEMP/tracing-versions.json"
+
+      - name: Plan CalVer release
+        id: plan
+        if: github.event_name == 'push'
+        uses: zhaochy1990/configurations/calver-release@2119101e51d528dba8fdac51c800d29bddab4c91 # v1
+        with:
+          phase: bump-versions
+          base: ${{ github.event.before }}
+          versions: ${{ runner.temp }}/tracing-versions.json
+
+      - name: Read the planned version
+        id: version
+        if: steps.plan.outputs.released == 'true'
+        env:
+          PACKAGES: ${{ steps.plan.outputs.packages }}
+        run: |
+          version=$(jq -er '.[] | select(.name == "dubhe-tracing") | .version' <<< "$PACKAGES")
+          printf 'value=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
@@ -46,6 +71,9 @@ jobs:
           load: true
           provenance: false
           tags: dubhe-tracing:smoke
+          labels: |
+            org.opencontainers.image.version=${{ steps.version.outputs.value }}
+            org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,scope=dubhe-tracing
           cache-to: type=gha,scope=dubhe-tracing,mode=max
 
@@ -54,10 +82,11 @@ jobs:
 
       - name: Resolve ACR image repository
         id: acr
-        if: github.event_name == 'push'
+        if: steps.plan.outputs.released == 'true'
         env:
           REGISTRY: ${{ vars.ALIYUN_ACR_REGISTRY }}
           IMAGE_PATH: ${{ vars.ALIYUN_ACR_IMAGE_PATH }}
+          VERSION: ${{ steps.version.outputs.value }}
         run: |
           if [[ ! "$REGISTRY" =~ ^[a-z0-9]+(-+[a-z0-9]+)*(\.[a-z0-9]+(-+[a-z0-9]+)*)+$ ]]; then
             echo "::error::Set ALIYUN_ACR_REGISTRY to the ACR hostname."
@@ -71,54 +100,103 @@ jobs:
           repository="$REGISTRY/$IMAGE_PATH"
           {
             printf 'repository=%s\n' "$repository"
-            printf 'tag=%s:%s\n' "$repository" "$GITHUB_SHA"
+            printf 'tag=%s:%s\n' "$repository" "$VERSION"
           } >> "$GITHUB_OUTPUT"
 
       - name: Log in to Aliyun ACR
-        if: github.event_name == 'push'
+        if: steps.plan.outputs.released == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ vars.ALIYUN_ACR_REGISTRY }}
           username: ${{ secrets.ALIYUN_ACR_USERNAME }}
           password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
 
-      - name: Check the commit tag is available
-        if: github.event_name == 'push'
-        env:
-          IMAGE_TAG: ${{ steps.acr.outputs.tag }}
-        run: |
-          if result=$(docker buildx imagetools inspect "$IMAGE_TAG" 2>&1); then
-            echo "::error::This commit tag already exists in ACR."
-            exit 1
-          fi
-          case "${result,,}" in
-            *": not found"|*"manifest unknown"*) ;;
-            *) echo "::error::Could not check whether the commit tag exists in ACR."; exit 1 ;;
-          esac
-
       - name: Push the smoke-tested image to Aliyun ACR
         id: release
-        if: github.event_name == 'push'
+        if: steps.plan.outputs.released == 'true'
+        shell: bash
         env:
           REPOSITORY: ${{ steps.acr.outputs.repository }}
           IMAGE_TAG: ${{ steps.acr.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.value }}
         run: |
-          docker image tag dubhe-tracing:smoke "$IMAGE_TAG"
-          push_log=$(docker image push "$IMAGE_TAG")
-          printf '%s\n' "$push_log"
-          if [[ ! "$push_log" =~ digest:\ (sha256:[0-9a-f]{64})([[:space:]]|$) ]]; then
-            echo "::error::The ACR push did not return an image digest."
+          existing=false
+          if result=$(docker buildx imagetools inspect "$IMAGE_TAG" 2>&1); then
+            # Recover a push that succeeded before the version could be recorded.
+            existing=true
+            digest=$(awk '$1 == "Digest:" {print $2; exit}' <<< "$result")
+          else
+            case "${result,,}" in
+              *": not found"|*"manifest unknown"*) ;;
+              *) echo "::error::Could not check whether the version tag exists in ACR."; exit 1 ;;
+            esac
+            docker image tag dubhe-tracing:smoke "$IMAGE_TAG"
+            push_log=$(docker image push "$IMAGE_TAG")
+            printf '%s\n' "$push_log"
+            if [[ "$push_log" =~ digest:\ (sha256:[0-9a-f]{64})([[:space:]]|$) ]]; then
+              digest="${BASH_REMATCH[1]}"
+            fi
+          fi
+          if [[ ! "${digest:-}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::ACR did not return a valid image digest."
             exit 1
           fi
-          digest="${BASH_REMATCH[1]}"
           image_ref="$REPOSITORY@$digest"
+          if [[ "$existing" == true ]]; then
+            docker pull "$image_ref"
+            labels=$(docker image inspect --format '{{json .Config.Labels}}' "$image_ref")
+            if ! jq -e --arg revision "$GITHUB_SHA" --arg version "$VERSION" \
+                '."org.opencontainers.image.revision" == $revision and ."org.opencontainers.image.version" == $version' \
+                <<< "$labels" >/dev/null; then
+              echo "::error::This version tag already exists in ACR for a different source or version."
+              exit 1
+            fi
+          fi
           {
             printf 'image_ref=%s\n' "$image_ref"
             printf 'digest=%s\n' "$digest"
           } >> "$GITHUB_OUTPUT"
           {
             printf '### Published Tracing image\n\n'
-            printf -- '- Commit tag `%s`\n' "$IMAGE_TAG"
+            printf -- '- Version tag `%s`\n' "$IMAGE_TAG"
+            printf -- '- Source commit `%s`\n' "$GITHUB_SHA"
             printf -- '- Image reference `%s`\n' "$image_ref"
             printf -- '- Digest `%s`\n' "$digest"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  record-version:
+    name: Record the published CalVer
+    needs: image
+    if: github.event_name == 'push' && needs.image.outputs.digest != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+
+      - name: Verify the version plan is current
+        id: check
+        env:
+          PACKAGES: ${{ needs.image.outputs.packages }}
+        run: |
+          version=$(jq -er '.[] | select(.name == "dubhe-tracing") | .version' <<< "$PACKAGES")
+          previous=$(jq -er '.[] | select(.name == "dubhe-tracing") | .previous' <<< "$PACKAGES")
+          current=$(jq -r '."dubhe-tracing" // ""' versions.json)
+          if [[ "$current" == "$version" ]]; then
+            echo 'record=false' >> "$GITHUB_OUTPUT"
+          elif [[ "$current" == "$previous" ]]; then
+            echo 'record=true' >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::The published version changed while this release was running."
+            exit 1
+          fi
+
+      - name: Commit the published version
+        if: steps.check.outputs.record == 'true'
+        uses: zhaochy1990/configurations/calver-release@2119101e51d528dba8fdac51c800d29bddab4c91 # v1
+        with:
+          phase: commit-versions
+          packages: ${{ needs.image.outputs.packages }}
+          base-branch: master
