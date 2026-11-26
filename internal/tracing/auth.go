@@ -16,16 +16,27 @@ type WorkloadCredential struct {
 	ProducerID string `json:"producer_id" mapstructure:"producer_id"`
 }
 
+type ReaderGrant struct {
+	Scope          Scope    `json:"scope" mapstructure:"scope"`
+	AgentIDs       []string `json:"agent_ids" mapstructure:"agent_ids"`
+	ModelInput     bool     `json:"model_input" mapstructure:"model_input"`
+	ToolParameters bool     `json:"tool_parameters" mapstructure:"tool_parameters"`
+}
+
 type ReaderCredential struct {
-	APIKey   string   `json:"-" mapstructure:"api_key"`
-	Token    string   `json:"-" mapstructure:"token"`
-	Scope    Scope    `json:"scope" mapstructure:"scope"`
-	AgentIDs []string `json:"agent_ids" mapstructure:"agent_ids"`
+	APIKey         string        `json:"-" mapstructure:"api_key"`
+	Token          string        `json:"-" mapstructure:"token"`
+	Scope          Scope         `json:"scope" mapstructure:"scope"`
+	AgentIDs       []string      `json:"agent_ids" mapstructure:"agent_ids"`
+	ModelInput     bool          `json:"model_input" mapstructure:"model_input"`
+	ToolParameters bool          `json:"tool_parameters" mapstructure:"tool_parameters"`
+	Grants         []ReaderGrant `json:"grants" mapstructure:"grants"`
 }
 
 type AuthConfig struct {
 	Workloads  []WorkloadCredential `mapstructure:"workloads"`
 	Registrars []WorkloadCredential `mapstructure:"registrars"`
+	Gateways   []WorkloadCredential `mapstructure:"gateways"`
 	Readers    []ReaderCredential   `mapstructure:"readers"`
 }
 
@@ -35,6 +46,7 @@ const (
 	workloadRole authRole = iota
 	registrarRole
 	readerRole
+	gatewayRole
 )
 
 type credentialScheme uint8
@@ -50,9 +62,30 @@ type requestCredential struct {
 }
 
 type authenticatedIdentity struct {
-	Scope      Scope
-	ProducerID string
-	AgentIDs   []string
+	Scope          Scope
+	ProducerID     string
+	AgentIDs       []string
+	ModelInput     bool
+	ToolParameters bool
+	ReaderGrants   []ReaderGrant
+}
+
+func (id authenticatedIdentity) readerScopes() []ReaderGrant {
+	if id.ReaderGrants != nil {
+		return id.ReaderGrants
+	}
+	return []ReaderGrant{{Scope: id.Scope, AgentIDs: id.AgentIDs, ModelInput: id.ModelInput, ToolParameters: id.ToolParameters}}
+}
+
+func (id authenticatedIdentity) forReaderScope(scope Scope) (authenticatedIdentity, bool) {
+	for _, grant := range id.readerScopes() {
+		if grant.Scope == scope {
+			return authenticatedIdentity{
+				Scope: scope, AgentIDs: grant.AgentIDs, ModelInput: grant.ModelInput, ToolParameters: grant.ToolParameters,
+			}, true
+		}
+	}
+	return authenticatedIdentity{}, false
 }
 
 // An authenticator resolves a presented credential to a scoped identity for
@@ -102,7 +135,7 @@ func newAPIKeyAuthenticator(config AuthConfig) (*apiKeyAuthenticator, error) {
 	for _, group := range []struct {
 		entries []WorkloadCredential
 		role    authRole
-	}{{config.Workloads, workloadRole}, {config.Registrars, registrarRole}} {
+	}{{config.Workloads, workloadRole}, {config.Registrars, registrarRole}, {config.Gateways, gatewayRole}} {
 		for _, entry := range group.entries {
 			if !entry.Scope.valid() || !opaqueID(entry.ProducerID) {
 				return nil, errors.New("invalid workload or registration identity configuration")
@@ -114,15 +147,28 @@ func newAPIKeyAuthenticator(config AuthConfig) (*apiKeyAuthenticator, error) {
 		}
 	}
 	for _, entry := range config.Readers {
-		if !entry.Scope.valid() {
-			return nil, errors.New("invalid reader identity configuration")
+		grants := entry.Grants
+		if len(grants) == 0 {
+			grants = []ReaderGrant{{Scope: entry.Scope, AgentIDs: entry.AgentIDs, ModelInput: entry.ModelInput, ToolParameters: entry.ToolParameters}}
+		} else if entry.Scope != (Scope{}) || len(entry.AgentIDs) != 0 || entry.ModelInput || entry.ToolParameters {
+			return nil, errors.New("configure either reader scope fields or grants")
 		}
-		for _, id := range entry.AgentIDs {
-			if !opaqueID(id) {
-				return nil, errors.New("invalid reader Agent grant")
+		seen := make(map[Scope]bool)
+		for _, grant := range grants {
+			if !grant.Scope.valid() || seen[grant.Scope] {
+				return nil, errors.New("invalid or duplicate reader scope grant")
+			}
+			seen[grant.Scope] = true
+			for _, id := range grant.AgentIDs {
+				if !opaqueID(id) {
+					return nil, errors.New("invalid reader Agent grant")
+				}
 			}
 		}
-		identity := authenticatedIdentity{Scope: entry.Scope, AgentIDs: entry.AgentIDs}
+		identity := authenticatedIdentity{ReaderGrants: grants}
+		if len(grants) == 1 {
+			identity, _ = identity.forReaderScope(grants[0].Scope)
+		}
 		if err := auth.add(entry.APIKey, entry.Token, identity, readerRole); err != nil {
 			return nil, err
 		}

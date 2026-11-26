@@ -23,6 +23,7 @@ type config struct {
 		MySQL  databaseConfig `mapstructure:"mysql"`
 		SQLite databaseConfig `mapstructure:"sqlite"`
 	} `mapstructure:"database"`
+	Tracing    tracing.Options    `mapstructure:"tracing"`
 	Auth       tracing.AuthConfig `mapstructure:"auth"`
 	LegacyAuth string             `mapstructure:"legacy_auth"`
 }

@@ -24,7 +24,7 @@ import (
 
 var testScope = Scope{TenantID: "tenant", EnvironmentID: "staging", ProjectID: "project"}
 
-func sqliteAPI(t *testing.T) (*httptest.Server, *gorm.DB) {
+func sqliteAPI(t *testing.T, options ...Options) (*httptest.Server, *gorm.DB) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "tracing.db")
 	open := func(dsn string) *gorm.DB {
@@ -47,14 +47,22 @@ func sqliteAPI(t *testing.T) (*httptest.Server, *gorm.DB) {
 	otherProject := testScope
 	otherProject.ProjectID = "other-project"
 	handler, err := NewHandler(writer, reader, AuthConfig{
-		Workloads:  []WorkloadCredential{{APIKey: "ingest", Scope: testScope, ProducerID: "worker"}},
-		Registrars: []WorkloadCredential{{APIKey: "register", Scope: testScope, ProducerID: "worker"}},
+		Workloads: []WorkloadCredential{{APIKey: "ingest", Scope: testScope, ProducerID: "worker"}},
+		Registrars: []WorkloadCredential{
+			{APIKey: "register", Scope: testScope, ProducerID: "worker"},
+			{APIKey: "register-other", Scope: otherProject, ProducerID: "worker"},
+		},
 		Readers: []ReaderCredential{
 			{APIKey: "query", Scope: testScope, AgentIDs: []string{"agent"}},
+			{APIKey: "query-content", Scope: testScope, AgentIDs: []string{"agent"}, ModelInput: true, ToolParameters: true},
 			{APIKey: "other-agent", Scope: testScope, AgentIDs: []string{"other-agent"}},
 			{APIKey: "other-project", Scope: otherProject, AgentIDs: []string{"agent"}},
+			{APIKey: "two-projects", Grants: []ReaderGrant{
+				{Scope: testScope, AgentIDs: []string{"agent"}},
+				{Scope: otherProject, AgentIDs: []string{"agent"}},
+			}},
 		},
-	})
+	}, options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,6 +196,22 @@ func TestSQLiteTraceLifecycle(t *testing.T) {
 		request(t, server, http.MethodGet, path, "other-project", "", "", nil, http.StatusNotFound)
 		request(t, server, http.MethodGet, path, "ingest", "", "", nil, http.StatusNotFound)
 		request(t, server, http.MethodGet, path+"&project_id=project", "query", "", "", nil, http.StatusNotFound)
+	}
+
+	paged := request(t, server, http.MethodGet, tracePath+"&limit=1", "query", "", "", nil, http.StatusOK)
+	var first, second traceView
+	if err := json.Unmarshal(paged, &first); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Nodes) != 1 || first.Nodes[0].Kind != "run" || first.NextCursor == "" {
+		t.Fatalf("unexpected first Trace page: %s", paged)
+	}
+	paged = request(t, server, http.MethodGet, tracePath+"&limit=1&cursor="+first.NextCursor, "query", "", "", nil, http.StatusOK)
+	if err := json.Unmarshal(paged, &second); err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Nodes) != 1 || second.Nodes[0].Kind != "llm" || !second.Nodes[0].UnloadedParent || second.NextCursor != "" {
+		t.Fatalf("unexpected second Trace page: %s", paged)
 	}
 
 	changed := proto.CloneOf(model)

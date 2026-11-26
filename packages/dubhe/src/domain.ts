@@ -4,12 +4,24 @@ export interface TraceScope {
   readonly projectId: string;
 }
 
+export interface TracingActor {
+  readonly kind: 'user' | 'workload';
+  readonly id: string;
+}
+
+export interface AgentGrant {
+  readonly producerId: string;
+  readonly agentId: string;
+}
+
 /** The application entry point verifies the caller, session, and Agent before tracing. */
 export interface VerifiedTurn {
   readonly scope: TraceScope;
   readonly sessionId: string;
   readonly turnId: string;
   readonly rootAgentId: string;
+  readonly agentGrants?: readonly AgentGrant[];
+  readonly sessionInitiator?: TracingActor;
   /** RFC 3339 timestamp issued by the trusted host. */
   readonly sessionStartedAt: string;
 }
@@ -33,6 +45,8 @@ export interface TrustedTracingHost {
   prepareRun(candidate: VerifiedRun): Promise<PrepareRunResult>;
   /** Read the host-confirmed outcome, including cancellation, when available. */
   getRunOutcome?(binding: VerifiedRun): RunOutcome | undefined;
+  /** Issue a Gateway-specific binding for this verified run and Agent. */
+  getGatewayBinding?(binding: VerifiedRun, agentId: string, origin: string): Promise<string | undefined>;
 }
 
 export interface RunRegistration {

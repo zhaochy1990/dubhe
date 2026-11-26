@@ -3,6 +3,8 @@ package tracing
 import (
 	"compress/gzip"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,19 +32,41 @@ type service struct {
 	writeStore store
 	readStore  store
 	auth       authenticator
+	cursorKey  []byte
 }
 
-func NewHandler(writeDB, readDB *gorm.DB, config AuthConfig) (http.Handler, error) {
+func NewHandler(writeDB, readDB *gorm.DB, config AuthConfig, options ...Options) (http.Handler, error) {
 	auth, err := newAPIKeyAuthenticator(config)
 	if err != nil {
 		return nil, err
 	}
-	srv := service{writeStore: store{writeDB}, readStore: store{readDB}, auth: auth}
+	var configOptions Options
+	if len(options) != 0 {
+		configOptions = options[0]
+	}
+	policy, err := compilePolicies(configOptions)
+	if err != nil {
+		return nil, err
+	}
+	srv := service{writeStore: store{writeDB, policy}, readStore: store{readDB, policy}, auth: auth, cursorKey: make([]byte, 32)}
+	if configOptions.CursorSigningKey != "" {
+		if len(configOptions.CursorSigningKey) < 32 {
+			return nil, errors.New("cursor_signing_key must be at least 32 bytes")
+		}
+		digest := sha256.Sum256([]byte(configOptions.CursorSigningKey))
+		srv.cursorKey = digest[:]
+	} else if _, err := rand.Read(srv.cursorKey); err != nil {
+		return nil, err
+	}
 	handler := http.NewServeMux()
 	handler.HandleFunc("POST /v1/traces", srv.ingest)
+	handler.HandleFunc("POST /internal/v1/observability/gateway-events", srv.gatewayAudit)
 	handler.HandleFunc("POST /internal/v1/observability/runs", srv.register)
+	handler.HandleFunc("GET /v1/observability/sessions", srv.listSessions)
+	handler.HandleFunc("GET /v1/observability/sessions/{session_id}/traces", srv.listSessionTraces)
 	handler.HandleFunc("GET /v1/observability/traces/{trace_id}", srv.getTrace)
 	handler.HandleFunc("GET /v1/observability/nodes/{node_id}", srv.getNode)
+	handler.HandleFunc("GET /v1/observability/tool-calls/{call_id}/trace", srv.getToolTrace)
 	return handler, nil
 }
 
@@ -195,14 +220,18 @@ func (s service) authorizedReader(r *http.Request) (authenticatedIdentity, url.V
 		return authenticatedIdentity{}, nil, false, authErr
 	}
 	tenant, environment, project := query["tenant_id"], query["environment_id"], query["project_id"]
+	if r.URL.Path == "/v1/observability/sessions" && len(tenant) == 0 && len(environment) == 0 && len(project) == 0 {
+		return identity, query, true, nil
+	}
 	if len(tenant) != 1 || len(environment) != 1 || len(project) != 1 {
 		return authenticatedIdentity{}, nil, false, nil
 	}
-	return identity, query, identity.Scope == (Scope{tenant[0], environment[0], project[0]}), nil
+	reader, allowed := identity.forReaderScope(Scope{tenant[0], environment[0], project[0]})
+	return reader, query, allowed, nil
 }
 
 func (s service) getTrace(w http.ResponseWriter, r *http.Request) {
-	identity, _, authorized, authErr := s.authorizedReader(r)
+	identity, query, authorized, authErr := s.authorizedReader(r)
 	if authErr != nil {
 		writeDetail(w, http.StatusServiceUnavailable, "Authentication service unavailable")
 		return
@@ -210,6 +239,21 @@ func (s service) getTrace(w http.ResponseWriter, r *http.Request) {
 	traceID, ok := parseID(r.PathValue("trace_id"), 16)
 	if !authorized || !ok {
 		writeDetail(w, http.StatusNotFound, "Not available")
+		return
+	}
+	limit := 512
+	if query.Has("limit") {
+		var err error
+		limit, err = strconv.Atoi(query.Get("limit"))
+		if err != nil || len(query["limit"]) != 1 || limit < 1 || limit > 512 {
+			writeDetail(w, http.StatusBadRequest, "Invalid Trace page size")
+			return
+		}
+	}
+	cursor, validCursor := s.parseCursor(query)
+	fingerprint := cursorFingerprint(identity, "nodes:"+strings.ToLower(r.PathValue("trace_id")), sessionFilters{})
+	if !validCursor || (cursor.ID != "" && cursor.Fingerprint != fingerprint) {
+		writeDetail(w, http.StatusBadRequest, "Invalid Trace cursor")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
@@ -221,8 +265,39 @@ func (s service) getTrace(w http.ResponseWriter, r *http.Request) {
 	case trace == nil:
 		writeDetail(w, http.StatusNotFound, "Not available")
 	default:
+		s.pageTrace(trace, cursor, limit, fingerprint)
 		writeJSON(w, http.StatusOK, trace)
 	}
+}
+
+func (s service) pageTrace(trace *traceView, cursor pageCursor, limit int, fingerprint string) {
+	nodes := trace.Nodes
+	for len(nodes) > 0 && cursor.ID != "" {
+		first := nodes[0]
+		if first.StartNS > cursor.Stamp || (first.StartNS == cursor.Stamp && first.NodeID > cursor.ID) {
+			break
+		}
+		nodes = nodes[1:]
+	}
+	if len(nodes) > limit {
+		nodes = nodes[:limit]
+		last := nodes[len(nodes)-1]
+		trace.NextCursor = s.signCursor(pageCursor{Stamp: last.StartNS, ID: last.NodeID, Fingerprint: fingerprint})
+	}
+	if len(nodes) != len(trace.Nodes) {
+		loaded := make(map[string]bool, len(nodes))
+		for _, node := range nodes {
+			if node.SpanID != "" {
+				loaded[node.SpanID] = true
+			}
+		}
+		for i := range nodes {
+			if parent := nodes[i].ParentSpanID; parent != nil && !loaded[*parent] {
+				nodes[i].UnloadedParent = true
+			}
+		}
+	}
+	trace.Nodes = nodes
 }
 
 func (s service) getNode(w http.ResponseWriter, r *http.Request) {
@@ -232,8 +307,18 @@ func (s service) getNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind, rawID, _ := strings.Cut(r.PathValue("node_id"), ":")
-	spanID, ok := parseID(rawID, 8)
-	if !authorized || !ok || kind != "span" || len(query["expected_trace_id"]) > 1 {
+	var lookupID any
+	var ok bool
+	switch kind {
+	case "span":
+		var spanID []byte
+		spanID, ok = parseID(rawID, 8)
+		lookupID = spanID
+		rawID = strings.ToLower(rawID)
+	case "tool":
+		lookupID, ok = rawID, opaqueID(rawID)
+	}
+	if !authorized || !ok || len(query["expected_trace_id"]) > 1 {
 		writeDetail(w, http.StatusNotFound, "Not available")
 		return
 	}
@@ -247,7 +332,7 @@ func (s service) getNode(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
-	node, err := s.readStore.node(ctx, identity, spanID, traceID)
+	node, err := s.readStore.node(ctx, identity, kind+":"+rawID, lookupID, traceID)
 	switch {
 	case err != nil:
 		writeDetail(w, http.StatusServiceUnavailable, "Tracing storage unavailable")
@@ -255,6 +340,35 @@ func (s service) getNode(w http.ResponseWriter, r *http.Request) {
 		writeDetail(w, http.StatusNotFound, "Not available")
 	default:
 		writeJSON(w, http.StatusOK, node)
+	}
+}
+
+func (s service) getToolTrace(w http.ResponseWriter, r *http.Request) {
+	reader, _, authorized, authErr := s.authorizedReader(r)
+	if authErr != nil {
+		writeDetail(w, http.StatusServiceUnavailable, "Authentication service unavailable")
+		return
+	}
+	callID := r.PathValue("call_id")
+	if !authorized || !opaqueID(callID) {
+		writeDetail(w, http.StatusNotFound, "Not available")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	reader.ModelInput, reader.ToolParameters = false, false
+	node, err := s.readStore.node(ctx, reader, "tool:"+callID, callID, nil)
+	switch {
+	case err != nil:
+		writeDetail(w, http.StatusServiceUnavailable, "Tracing storage unavailable")
+	case node == nil:
+		writeDetail(w, http.StatusNotFound, "Not available")
+	default:
+		writeJSON(w, http.StatusOK, struct {
+			Scope
+			TraceID string `json:"trace_id"`
+			NodeID  string `json:"node_id"`
+		}{reader.Scope, node.TraceID, node.NodeID})
 	}
 }
 
@@ -271,6 +385,7 @@ func writeJSON(w http.ResponseWriter, httpStatus int, payload any) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(httpStatus)
 	_, _ = fmt.Fprintln(w, string(body))
 }

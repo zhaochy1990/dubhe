@@ -26,7 +26,15 @@ trap 'exit 143' TERM
 "$go_cli" test ./...
 "$go_cli" build -o "$run_dir/dubhe-tracing" ./cmd/dubhe-tracing
 
-export DUBHE_TEST_SQLITE_PATH="$run_dir/tracing.db"
+database_driver=sqlite
+if [[ -n ${DUBHE_TEST_MYSQL_DSN:-} ]]; then
+    database_driver=mysql
+    export DUBHE_MYSQL_DSN="$DUBHE_TEST_MYSQL_DSN"
+    unset DUBHE_TEST_SQLITE_PATH
+else
+    export DUBHE_TEST_SQLITE_PATH="$run_dir/tracing.db"
+    export DUBHE_SQLITE_DSN="$DUBHE_TEST_SQLITE_PATH"
+fi
 cat > "$run_dir/tracing.yaml" <<'YAML'
 auth:
   workloads:
@@ -37,7 +45,24 @@ auth:
     - api_key: "register-token"
       scope: *scope
       producer_id: "agent-worker"
+  gateways:
+    - api_key: "audit-token"
+      scope: *scope
+      producer_id: "tool-gateway"
   readers:
+    - api_key: "content-reader"
+      scope: *scope
+      agent_ids: ["support-agent", "orders-agent"]
+      model_input: true
+      tool_parameters: true
+    - api_key: "model-reader"
+      scope: *scope
+      agent_ids: ["support-agent", "orders-agent"]
+      model_input: true
+    - api_key: "tools-reader"
+      scope: *scope
+      agent_ids: ["support-agent", "orders-agent"]
+      tool_parameters: true
     - api_key: "reader-token"
       scope: *scope
       agent_ids: ["support-agent"]
@@ -53,11 +78,21 @@ auth:
     - api_key: "other-agent-reader"
       scope: *scope
       agent_ids: ["billing-agent"]
+tracing:
+  scopes:
+    - scope: *scope
+      content_days: 1
+      agents:
+        - {id: "support-agent", name: "Customer Support"}
+        - {id: "orders-agent", name: "Orders"}
+      models:
+        - {id: "fixture-v1", name: "provider-fixture"}
+      tool_ids: ["orders.lookup", "orders.update", "local.echo"]
 YAML
 
-env -u DUBHE_TRACING_AUTH -u DUBHE_SQLITE_READ_DSN \
-    DUBHE_SQLITE_DSN="$DUBHE_TEST_SQLITE_PATH" DUBHE_LISTEN=127.0.0.1:0 \
-    "$run_dir/dubhe-tracing" --config "$run_dir/tracing.yaml" --database-driver sqlite \
+env -u DUBHE_TRACING_AUTH -u DUBHE_SQLITE_READ_DSN -u DUBHE_MYSQL_READ_DSN \
+    DUBHE_LISTEN=127.0.0.1:0 \
+    "$run_dir/dubhe-tracing" --config "$run_dir/tracing.yaml" --database-driver "$database_driver" \
     >"$run_dir/service.log" 2>&1 &
 service_pid=$!
 deadline=$((SECONDS + 15))
