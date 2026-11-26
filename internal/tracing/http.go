@@ -1,6 +1,7 @@
 package tracing
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/rand"
@@ -63,10 +64,12 @@ func NewHandler(writeDB, readDB *gorm.DB, config AuthConfig, options ...Options)
 	handler.HandleFunc("POST /internal/v1/observability/gateway-events", srv.gatewayAudit)
 	handler.HandleFunc("POST /internal/v1/observability/runs", srv.register)
 	handler.HandleFunc("GET /v1/observability/sessions", srv.listSessions)
+	handler.HandleFunc("GET /v1/observability/sessions/traces", srv.listSessionTraces)
 	handler.HandleFunc("GET /v1/observability/sessions/{session_id}/traces", srv.listSessionTraces)
 	handler.HandleFunc("GET /v1/observability/traces/{trace_id}", srv.getTrace)
 	handler.HandleFunc("GET /v1/observability/nodes/{node_id}", srv.getNode)
 	handler.HandleFunc("GET /v1/observability/tool-calls/{call_id}/trace", srv.getToolTrace)
+	mountTracingUI(handler)
 	return handler, nil
 }
 
@@ -333,6 +336,9 @@ func (s service) getNode(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
 	node, err := s.readStore.node(ctx, identity, kind+":"+rawID, lookupID, traceID)
+	if err == nil && node != nil && node.ContentState == "available" && query.Get("content_format") == "json_text" {
+		node.Metadata, err = formatNodeContent(node.Metadata, node.Kind)
+	}
 	switch {
 	case err != nil:
 		writeDetail(w, http.StatusServiceUnavailable, "Tracing storage unavailable")
@@ -341,6 +347,29 @@ func (s service) getNode(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusOK, node)
 	}
+}
+
+// Browser readers can render raw JSON values without rounding numbers that
+// fall outside JavaScript's numeric precision. Summary fields stay typed.
+func formatNodeContent(raw json.RawMessage, kind string) (json.RawMessage, error) {
+	var metadata map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return nil, err
+	}
+	for _, key := range contentKeys(kind) {
+		if value, exists := metadata[key]; exists {
+			var formatted bytes.Buffer
+			if err := json.Indent(&formatted, value, "", "  "); err != nil {
+				return nil, err
+			}
+			encoded, err := json.Marshal(formatted.String())
+			if err != nil {
+				return nil, err
+			}
+			metadata[key] = encoded
+		}
+	}
+	return json.Marshal(metadata)
 }
 
 func (s service) getToolTrace(w http.ResponseWriter, r *http.Request) {

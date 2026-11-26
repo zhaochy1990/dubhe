@@ -419,10 +419,14 @@ func observedRangeCTE(agents string) string {
 }
 
 func (f sessionFilters) matches(view sessionView) bool {
+	name := view.AgentName
+	if name == "" {
+		name = view.RootAgent
+	}
 	return (len(f.Agents) == 0 || slices.Contains(f.Agents, view.RootAgent)) &&
 		(len(f.Result) == 0 || (view.Result != nil && slices.Contains(f.Result, *view.Result))) &&
 		(f.Search == "" || strings.Contains(strings.ToLower(view.SessionID), f.Search) ||
-			strings.Contains(strings.ToLower(view.AgentName), f.Search))
+			strings.Contains(strings.ToLower(name), f.Search))
 }
 
 func makeBuckets(f sessionFilters) []timeBucket {
@@ -455,6 +459,9 @@ func (s service) listSessionTraces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := r.PathValue("session_id")
+	if sessionID == "" && len(query["session_id"]) == 1 {
+		sessionID = query.Get("session_id")
+	}
 	if !authorized || !opaqueID(sessionID) {
 		writeDetail(w, http.StatusNotFound, "Not available")
 		return

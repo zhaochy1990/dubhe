@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dubhe · Agent 观测</title>
+    <link rel="stylesheet" href="./tracing.css">
+    <script type="module" src="./tracing.js"></script>
+  </head>
+  <body>
+    <header class="top">
+      <div class="top-inner">
+        <span class="brand">Dubhe</span>
+        <span class="crumb" id="crumb">Agent 观测</span>
+      </div>
+    </header>
+    <main class="content">
+      <section id="session-list" aria-labelledby="sessions-heading">
+        <div class="heading">
+          <h1 id="sessions-heading">Agent 观测</h1>
+          <div class="observe-controls">
+            <select class="btn" id="trace-time" aria-label="时间范围">
+              <option value="7">最近 7 天</option>
+              <option value="1">最近 24 小时</option>
+              <option value="30">最近 30 天</option>
+            </select>
+            <select class="btn" id="trace-agent" aria-label="Agent">
+              <option value="">全部 Agent</option>
+            </select>
+          </div>
+        </div>
+        <section class="panel" aria-labelledby="sessions-table-heading">
+          <div class="observe-toolbar">
+            <h2 id="sessions-table-heading">Sessions</h2>
+            <input id="session-search" type="search" aria-label="搜索 Session 或 Agent" placeholder="搜索 Session 或 Agent" autocomplete="off">
+          </div>
+          <div class="observe-chart" id="chart" hidden>
+            <div><b>会话数量</b><span id="chart-range"></span></div>
+            <div class="bars" id="session-bars" role="img"></div>
+            <div class="chart-labels"><span id="chart-start"></span><span id="chart-end"></span></div>
+          </div>
+          <div id="sessions-status" class="request-status"></div>
+          <div class="table-wrap" id="sessions-table" role="region" aria-label="会话列表" tabindex="0" hidden>
+            <table>
+              <thead><tr>
+                <th scope="col">开始时间</th><th scope="col">Session ID</th><th scope="col">Agent</th>
+                <th scope="col">发起人</th><th scope="col">工具调用</th><th scope="col">耗时</th>
+              </tr></thead>
+              <tbody id="session-rows"></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="pagination" hidden>
+            <span id="session-count" role="status"></span>
+            <div>
+              <button class="btn" id="previous-page" type="button">上一页</button>
+              <button class="btn" id="next-page" type="button">下一页</button>
+            </div>
+          </div>
+        </section>
+      </section>
+      <section id="session-detail" aria-labelledby="session-heading" hidden></section>
+    </main>
+    <template id="session-template">
+      <div class="heading trace-page-heading">
+        <div>
+          <h1 id="session-heading" tabindex="-1">会话详情</h1>
+          <p id="session-identity"></p>
+        </div>
+        <button class="btn" id="back-to-sessions" type="button">返回会话列表</button>
+      </div>
+      <div class="panel turns-panel">
+        <div class="turns-controls" hidden>
+          <label for="trace-turn">Trace 轮次</label>
+          <select class="btn" id="trace-turn"></select>
+          <button class="btn" id="more-turns" type="button" hidden>加载更多轮次</button>
+        </div>
+        <div id="turns-status" class="request-status"></div>
+      </div>
+      <div class="panel trace-page-body" hidden>
+        <div class="trace-work">
+          <div class="trace-work-head view-switch">
+            <h2>调用轨迹</h2>
+            <div role="group" aria-label="Trace 视图">
+              <button class="btn active" type="button" data-trace-view="timeline" aria-pressed="true">时间线</button>
+              <button class="btn" type="button" data-trace-view="tree" aria-pressed="false">调用树</button>
+            </div>
+          </div>
+          <p id="trace-identity" class="trace-identity"></p>
+          <div id="trace-status" class="request-status"></div>
+          <div id="trace-canvas" aria-label="Trace 节点"></div>
+          <button id="more-nodes" class="btn load-nodes" type="button" hidden>加载更多节点</button>
+        </div>
+        <aside class="trace-inspector" aria-labelledby="node-heading">
+          <div class="panel-head">
+            <h2 id="node-heading" tabindex="-1">调用详情</h2>
+            <button class="btn inspector-back" type="button">返回调用列表</button>
+          </div>
+          <div class="trace-detail" id="span-detail"></div>
+        </aside>
+      </div>
+    </template>
+  </body>
+</html>
