@@ -92,6 +92,40 @@ DUBHE_TEST_MYSQL_DSN='dubhe:dubhe@tcp(127.0.0.1:3306)/dubhe' \
 
 可用 `DUBHE_TEST_CHROMIUM_PATH` 指定本机 Chromium。测试入口只绑定回环地址，在服务端附加读凭据。桌面和窄屏用例比较 SDK 写入的 Session、Trace 与 Span 在 API 和页面中的呈现。
 
+### 构建和发布 Tracing 镜像
+
+面向 `master` 的 PR 和每次推送都会构建镜像，并用独立的 MySQL 8.4 容器验证 `/tracing/` 及鉴权后的 Trace 上报和查询。本地用 Docker 和 Node.js 24 可运行同一套检查。
+
+```sh
+docker buildx build --load --tag dubhe-tracing:smoke .
+./scripts/test-tracing-v1.sh dubhe-tracing:smoke
+```
+
+只有 `master` 推送通过检查后才将已验证的镜像发布到阿里云 ACR。首次发布前，在 Dubhe 仓库配置以下 Actions 变量和 Secrets，并给发布账号授予目标镜像仓库的读取和写入权限。
+
+| 类型 | 名称 | 值 |
+| --- | --- | --- |
+| 变量 | `ALIYUN_ACR_REGISTRY` | ACR 主机名 |
+| 变量 | `ALIYUN_ACR_IMAGE_PATH` | Dubhe 在 ACR 中的 `命名空间/镜像仓库` |
+| Secret | `ALIYUN_ACR_USERNAME` | ACR 登录用户名 |
+| Secret | `ALIYUN_ACR_PASSWORD` | ACR 登录密码 |
+
+发布只使用完整提交 SHA 标签。若该标签已存在，发布流程会停止并保留原有镜像。推送成功后，Actions 运行摘要提供标签、digest 和 `仓库@sha256:…` 引用。将 `IMAGE_REF` 设为摘要中的完整 digest 引用，登录 ACR 后拉取镜像，再运行浏览器验收。可按上文安装 Playwright Chromium，或用 `DUBHE_TEST_CHROMIUM_PATH` 指定本机 Chromium。
+
+```sh
+docker login "${IMAGE_REF%%/*}"
+docker pull "$IMAGE_REF"
+DUBHE_TEST_BROWSER=1 ./scripts/test-tracing-v1.sh "$IMAGE_REF"
+```
+
+运行时将按[示例配置](config.example.yaml)准备的 YAML 只读挂载到 `/etc/dubhe/config.yaml`，并使容器用户 `65532:65532` 可读。将 `database.driver` 设为 `mysql`，配置容器可访问的专用 MySQL 地址及应用凭据。容器监听 8080 端口。
+
+```sh
+docker run --rm -p 127.0.0.1:8080:8080 \
+  --mount "type=bind,source=$PWD/config.yaml,target=/etc/dubhe/config.yaml,readonly" \
+  "$IMAGE_REF"
+```
+
 ## Python 参考实现
 
 ### 本地验证

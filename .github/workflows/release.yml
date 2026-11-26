@@ -1,0 +1,124 @@
+name: Tracing image
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tracing-image-${{ github.event_name }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    name: Build and smoke-test Tracing image
+    runs-on: ubuntu-latest
+    outputs:
+      image_ref: ${{ steps.release.outputs.image_ref }}
+      digest: ${{ steps.release.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/dubhe/package-lock.json
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          # Match Running's BuildKit version for ACR Personal Edition.
+          driver-opts: image=moby/buildkit:v0.31.2
+
+      - name: Build candidate
+        uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_SUMMARY: false
+        with:
+          context: .
+          load: true
+          provenance: false
+          tags: dubhe-tracing:smoke
+          cache-from: type=gha,scope=dubhe-tracing
+          cache-to: type=gha,scope=dubhe-tracing,mode=max
+
+      - name: Smoke-test with MySQL
+        run: ./scripts/test-tracing-v1.sh dubhe-tracing:smoke
+
+      - name: Resolve ACR image repository
+        id: acr
+        if: github.event_name == 'push'
+        env:
+          REGISTRY: ${{ vars.ALIYUN_ACR_REGISTRY }}
+          IMAGE_PATH: ${{ vars.ALIYUN_ACR_IMAGE_PATH }}
+        run: |
+          if [[ ! "$REGISTRY" =~ ^[a-z0-9]+(-+[a-z0-9]+)*(\.[a-z0-9]+(-+[a-z0-9]+)*)+$ ]]; then
+            echo "::error::Set ALIYUN_ACR_REGISTRY to the ACR hostname."
+            exit 1
+          fi
+          component='[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*'
+          if [[ ! "$IMAGE_PATH" =~ ^${component}/${component}$ ]]; then
+            echo "::error::Set ALIYUN_ACR_IMAGE_PATH to namespace/repository."
+            exit 1
+          fi
+          repository="$REGISTRY/$IMAGE_PATH"
+          {
+            printf 'repository=%s\n' "$repository"
+            printf 'tag=%s:%s\n' "$repository" "$GITHUB_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Aliyun ACR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.ALIYUN_ACR_REGISTRY }}
+          username: ${{ secrets.ALIYUN_ACR_USERNAME }}
+          password: ${{ secrets.ALIYUN_ACR_PASSWORD }}
+
+      - name: Check the commit tag is available
+        if: github.event_name == 'push'
+        env:
+          IMAGE_TAG: ${{ steps.acr.outputs.tag }}
+        run: |
+          if result=$(docker buildx imagetools inspect "$IMAGE_TAG" 2>&1); then
+            echo "::error::This commit tag already exists in ACR."
+            exit 1
+          fi
+          case "${result,,}" in
+            *": not found"|*"manifest unknown"*) ;;
+            *) echo "::error::Could not check whether the commit tag exists in ACR."; exit 1 ;;
+          esac
+
+      - name: Push the smoke-tested image to Aliyun ACR
+        id: release
+        if: github.event_name == 'push'
+        env:
+          REPOSITORY: ${{ steps.acr.outputs.repository }}
+          IMAGE_TAG: ${{ steps.acr.outputs.tag }}
+        run: |
+          docker image tag dubhe-tracing:smoke "$IMAGE_TAG"
+          push_log=$(docker image push "$IMAGE_TAG")
+          printf '%s\n' "$push_log"
+          if [[ ! "$push_log" =~ digest:\ (sha256:[0-9a-f]{64})([[:space:]]|$) ]]; then
+            echo "::error::The ACR push did not return an image digest."
+            exit 1
+          fi
+          digest="${BASH_REMATCH[1]}"
+          image_ref="$REPOSITORY@$digest"
+          {
+            printf 'image_ref=%s\n' "$image_ref"
+            printf 'digest=%s\n' "$digest"
+          } >> "$GITHUB_OUTPUT"
+          {
+            printf '### Published Tracing image\n\n'
+            printf -- '- Commit tag `%s`\n' "$IMAGE_TAG"
+            printf -- '- Image reference `%s`\n' "$image_ref"
+            printf -- '- Digest `%s`\n' "$digest"
+          } >> "$GITHUB_STEP_SUMMARY"

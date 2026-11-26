@@ -1,0 +1,11 @@
+**
+!go.mod
+!go.sum
+!cmd/dubhe-tracing/*.go
+!internal/tracing/*.go
+!internal/tracing/sqlite.sql
+!internal/tracing/web/*.html
+!internal/tracing/web/*.css
+!internal/tracing/web/*.js
+!src/dubhe/schema.go
+!src/dubhe/schema.sql
