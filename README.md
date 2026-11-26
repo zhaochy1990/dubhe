@@ -101,7 +101,9 @@ docker buildx build --load --tag dubhe-tracing:smoke .
 ./scripts/test-tracing-v1.sh dubhe-tracing:smoke
 ```
 
-只有 `master` 推送通过检查后才将已验证的镜像发布到阿里云 ACR。首次发布前，在 Dubhe 仓库配置以下 Actions 变量和 Secrets，并给发布账号授予目标镜像仓库的读取和写入权限。
+Tracing 镜像采用与 Auth 和 Running 相同的 CalVer（`YYYY.M.N`）。工作流识别 [发布路径](.github/release-packages.json) 中的变更，为本次 `master` 推送计算下一个版本。月份按 UTC 计算，每月从 `.1` 开始。镜像通过检查并成功推送到阿里云 ACR 后，工作流才将实际发布的版本写入 [`versions.json`](versions.json)。
+
+首次发布前，在 Dubhe 仓库配置以下 Actions 变量和 Secrets，并给发布账号授予目标镜像仓库的读取和写入权限。
 
 | 类型 | 名称 | 值 |
 | --- | --- | --- |
@@ -110,7 +112,7 @@ docker buildx build --load --tag dubhe-tracing:smoke .
 | Secret | `ALIYUN_ACR_USERNAME` | ACR 登录用户名 |
 | Secret | `ALIYUN_ACR_PASSWORD` | ACR 登录密码 |
 
-发布只使用完整提交 SHA 标签。若该标签已存在，发布流程会停止并保留原有镜像。推送成功后，Actions 运行摘要提供标签、digest 和 `仓库@sha256:…` 引用。将 `IMAGE_REF` 设为摘要中的完整 digest 引用，登录 ACR 后拉取镜像，再运行浏览器验收。可按上文安装 Playwright Chromium，或用 `DUBHE_TEST_CHROMIUM_PATH` 指定本机 Chromium。
+镜像标签示例为 `stride/dubhe-tracing:2026.11.1`。镜像的 OCI 标签记录版本和完整源码 SHA，Actions 运行摘要同时提供 Git 提交、镜像标签和 `仓库@sha256:…` 引用。如果发布或版本回写失败，可以重跑失败的 job。将 `IMAGE_REF` 设为摘要中的完整 digest 引用，登录 ACR 后拉取镜像，再运行浏览器验收。可按上文安装 Playwright Chromium，或用 `DUBHE_TEST_CHROMIUM_PATH` 指定本机 Chromium。
 
 ```sh
 docker login "${IMAGE_REF%%/*}"
