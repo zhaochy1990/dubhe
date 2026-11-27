@@ -1,0 +1,7 @@
+services:
+  tracing:
+    image: dubhe-tracing:local
+    platform: ${DUBHE_TRACING_PLATFORM:-}
+    pull_policy: build
+    build:
+      context: .

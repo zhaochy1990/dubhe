@@ -1,0 +1,70 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: dubhe
+      MYSQL_USER: dubhe
+      MYSQL_PASSWORD: ${DUBHE_MYSQL_PASSWORD:-dubhe-dev-db}
+      MYSQL_ROOT_PASSWORD: ${DUBHE_MYSQL_ROOT_PASSWORD:-dubhe-dev-root}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_PASSWORD\" mysql --protocol=TCP -h 127.0.0.1 -u \"$$MYSQL_USER\" \"$$MYSQL_DATABASE\" -e 'SELECT 1' >/dev/null"]
+      interval: 2s
+      timeout: 5s
+      retries: 40
+
+  tracing:
+    image: ${DUBHE_TRACING_IMAGE:-crpi-62dr2n7q1cuj1elz.cn-shanghai.personal.cr.aliyuncs.com/stride/dubhe-tracing:2026.11.1}
+    platform: ${DUBHE_TRACING_PLATFORM:-linux/amd64}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DUBHE_LISTEN: 0.0.0.0:8080
+      DUBHE_DATABASE_DRIVER: mysql
+      DUBHE_MYSQL_DSN: dubhe:${DUBHE_MYSQL_PASSWORD:-dubhe-dev-db}@tcp(mysql:3306)/dubhe
+    volumes:
+      - type: bind
+        source: ${DUBHE_CONFIG_FILE:-./config.example.yaml}
+        target: /etc/dubhe/config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+    ports:
+      - "127.0.0.1:${DUBHE_TRACING_PORT:-4318}:8080"
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -ec
+        - |
+          exec 3<>/dev/tcp/127.0.0.1/8080
+          printf 'GET /tracing/ HTTP/1.0\r\n\r\n' >&3
+          read -r protocol status reason <&3
+          test "$$status" = 200
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  ui:
+    image: nginx:1.28-alpine
+    depends_on:
+      tracing:
+        condition: service_healthy
+    environment:
+      DUBHE_UI_READER_KEY: ${DUBHE_UI_READER_KEY:-local-reader-key}
+      NGINX_ENVSUBST_FILTER: "^DUBHE_NGINX_READER_KEY$"
+    volumes:
+      - ./deploy/local/15-reader-key.envsh:/docker-entrypoint.d/15-reader-key.envsh:ro
+      - ./deploy/local/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    ports:
+      - "127.0.0.1:${DUBHE_UI_PORT:-3000}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-Y", "off", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/v1/observability/sessions"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  mysql-data:

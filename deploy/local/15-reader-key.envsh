@@ -1,0 +1,11 @@
+#!/bin/sh
+# The Nginx entrypoint sources this before rendering the configuration.
+case "$DUBHE_UI_READER_KEY" in
+    ''|*[[:space:][:cntrl:]]*)
+        echo 'DUBHE_UI_READER_KEY must be a nonempty HTTP header value without whitespace.' >&2
+        exit 1
+        ;;
+esac
+
+DUBHE_NGINX_READER_KEY=$(printf '%s' "$DUBHE_UI_READER_KEY" | sed 's/[\\"]/\\&/g')
+export DUBHE_NGINX_READER_KEY

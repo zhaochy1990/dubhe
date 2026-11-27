@@ -5,7 +5,7 @@ import { test, type TestContext } from 'node:test';
 import { HumanMessage } from '@langchain/core/messages';
 import type { VerifiedTurn } from '@lipaotech/dubhe';
 import { chromium, type Page } from 'playwright';
-import { answer, baseUrl, newTurn, readNode, readTrace, setup, TestModel, type Trace } from './support.js';
+import { answer, baseUrl, newTurn, readNode, readTrace, readTraceTopology, setup, TestModel, type Trace } from './support.js';
 
 const live = { skip: !baseUrl || process.env.DUBHE_TEST_BROWSER !== '1', timeout: 45_000 };
 const orderID = '9223372036854775807';
@@ -191,12 +191,8 @@ test('deployed Tracing UI reads the SDK Session and Span topology through the au
   assert.deepEqual(await turns.locator('option').evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value)),
     [secondTraceId, trace.trace_id]);
   await turns.selectOption(trace.trace_id);
-  const buttons = page.locator('#trace-canvas button[data-node]');
   await page.locator('#trace-canvas .waterfall-track').first().waitFor();
-  const readTopology = () => buttons.evaluateAll((values) => values.map((button) => [
-    (button as HTMLElement).dataset.node, (button as HTMLElement).dataset.parentSpan || null,
-  ]));
-  assert.deepEqual(await readTopology(), trace.nodes.map((node) => [node.node_id, node.parent_span_id]));
+  assert.deepEqual(await readTraceTopology(page), trace.nodes.map((node) => [node.node_id, node.parent_span_id]));
 
   const inspector = page.getByRole('complementary', { name: '调用详情' });
   const model = trace.nodes.find((node) => node.kind === 'llm');
@@ -215,7 +211,7 @@ test('deployed Tracing UI reads the SDK Session and Span topology through the au
   await page.getByRole('button', { name: '调用树' }).click();
   assert.equal(await page.getByRole('button', { name: '调用树' }).getAttribute('aria-pressed'), 'true');
   assert.equal(await page.locator('#trace-canvas .waterfall-track').count(), 0);
-  const tree = await readTopology();
+  const tree = await readTraceTopology(page);
   assert.equal(tree[0][0], trace.nodes.find((node) => node.kind === 'run')?.node_id);
   assert.deepEqual([...tree].sort(), trace.nodes.map((node) => [node.node_id, node.parent_span_id]).sort());
   const tool = trace.nodes.find((node) => node.kind === 'tool');
