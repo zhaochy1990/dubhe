@@ -2,6 +2,105 @@
 
 Dubhe 为 LangChain Agent 提供 Tracing。TypeScript SDK `@lipaotech/dubhe` 通过 LangChain callback 记录运行、模型、子 Agent 和工具客户端 Span。Go 服务接收 OTLP/HTTP 数据，在数据库事务提交后确认，并按租户、环境、项目及 Agent 授权查询。服务支持 MySQL InnoDB 和本地 SQLite 文件。
 
+## 本地 Docker Compose
+
+在仓库根目录执行以下命令。默认镜像是阿里云 ACR 的 `stride/dubhe-tracing:2026.11.1`。Docker 登录使用有拉取权限的 ACR 账号。
+
+```sh
+docker login crpi-62dr2n7q1cuj1elz.cn-shanghai.personal.cr.aliyuncs.com
+docker compose up -d
+docker compose ps
+docker compose logs -f mysql tracing ui
+```
+
+在浏览器打开 [http://127.0.0.1:3000/tracing/](http://127.0.0.1:3000/tracing/)。MySQL 8.4 先确认应用账号可查询数据库，Go Tracing 通过现有机制初始化 schema 后才开放 HTTP，浏览器入口通过一次鉴权 Session 查询报告就绪。可用 `docker compose up -d --wait` 等待三项检查全部通过。
+
+### 镜像与本地配置
+
+默认 ACR 镜像的平台为 `linux/amd64`。Apple Silicon 可使用 Docker Desktop 的 amd64 模拟运行，或用以下命令从当前源码构建本机架构的镜像。源码构建使用仓库的 Dockerfile，可以在没有 ACR 拉取权限时运行。
+
+```sh
+docker compose -f compose.yaml -f compose.build.yaml up -d --build --wait
+```
+
+可复制 [`.env.example`](.env.example) 为 `.env` 调整配置。之后重新执行所选的 `up` 命令应用改动。
+
+| 配置 | 默认值与用途 |
+| --- | --- |
+| `DUBHE_TRACING_IMAGE` | 完整镜像地址。支持 `仓库:标签` 和 `仓库@sha256:…` |
+| `DUBHE_TRACING_PLATFORM` | ACR 默认为 `linux/amd64`。源码构建默认用本机架构 |
+| `DUBHE_TRACING_PORT` | `4318`，宿主机 Agent 入口 |
+| `DUBHE_UI_PORT` | `3000`，浏览器与同源查询入口 |
+| `DUBHE_CONFIG_FILE` | `./config.example.yaml`，Go 服务以 UID `65532` 只读挂载 |
+| `DUBHE_MYSQL_PASSWORD` / `DUBHE_MYSQL_ROOT_PASSWORD` | 初始化 MySQL 应用账号和管理员密码。已有卷沿用创建时的密码 |
+| `DUBHE_UI_READER_KEY` | `local-reader-key`，由浏览器入口在服务端附加给查询 API |
+
+修改凭据时，将 [示例配置](config.example.yaml) 复制到 `config.yaml`，使容器 UID 可读，然后在 `.env` 设置 `DUBHE_CONFIG_FILE=./config.yaml`。为 YAML 中的 `registrars`、`workloads` 和 `readers` 各生成一个不同的密钥，例如使用 `openssl rand -hex 32`。把读密钥同步到 `DUBHE_UI_READER_KEY`。如果原地修改了已挂载的 YAML，先执行 `docker compose restart tracing` 重新加载文件，再用所选的 `up` 命令应用环境变量。两个宿主机端口均绑定到回环地址，浏览器入口为本机用户提供配置中读角色的查询权限。
+
+用 `docker compose stop` 暂停项目，重新运行启动命令可继续查看原有会话。用 `docker compose down` 移除容器并保留 MySQL 命名卷。需要清空所有本地 Tracing 数据时，执行 `docker compose down -v`，下次启动会重新初始化数据库。
+
+### 接入宿主机 TypeScript Agent
+
+使用 Node.js 24，从当前仓库构建 SDK，然后在已有 Agent 的项目中安装本地包。
+
+```sh
+npm --prefix packages/dubhe ci
+npm --prefix packages/dubhe run build
+# 在 Agent 项目目录运行
+npm install /absolute/path/to/dubhe/packages/dubhe
+```
+
+沿用[下方的 SDK 接入示例](#接入-typescript-agent)。默认配置的 `scope` 为 `{ tenantId: "tenant-alpha", environmentId: "staging", projectId: "support" }`，`producerId` 为 `agent-worker`，可信轮次的 `rootAgentId` 为 `support-agent`。将登记凭据和上报凭据分别配置到 Agent 的服务端环境，例如 `DUBHE_REGISTRATION_API_KEY` 和 `DUBHE_WORKLOAD_API_KEY`，再由各自的 `getHeaders` 或 `getOtlpHeaders` 回调发送 `X-API-Key`。
+
+| 请求 | 默认 URL | 默认密钥 |
+| --- | --- | --- |
+| 可信登记 | `http://127.0.0.1:4318/internal/v1/observability/runs` | `local-registration-key` |
+| OTLP/HTTP 上报 | `http://127.0.0.1:4318/v1/traces` | `local-workload-key` |
+
+用应用已有的 Session ID 和创建时间，以及每次用户轮次的唯一 ID 构造 `verifiedTurn`。下面的 `trustedHost` 可用于单进程本地开发。多个进程共用会话时，使用应用的持久存储原子认领轮次。 [SDK 绑定约定](docs/architecture/tracing-sdk.md)
+
+```typescript
+import type { TrustedTracingHost, VerifiedRun } from "@lipaotech/dubhe";
+
+const { env } = process;
+const tracingUrl = `http://127.0.0.1:${env.DUBHE_TRACING_PORT || "4318"}`;
+const registrationAPIKey = env.DUBHE_REGISTRATION_API_KEY || "local-registration-key";
+const workloadAPIKey = env.DUBHE_WORKLOAD_API_KEY || "local-workload-key";
+const scope = { tenantId: "tenant-alpha", environmentId: "staging", projectId: "support" };
+const producerId = "agent-worker";
+const bindings = new Map<string, VerifiedRun>();
+const trustedHost: TrustedTracingHost = {
+  async prepareRun(candidate) {
+    const key = JSON.stringify([candidate.scope, candidate.sessionId, candidate.turnId]);
+    if (bindings.has(key)) return { outcome: "already_bound" };
+    bindings.set(key, candidate);
+    return { outcome: "started", binding: candidate };
+  },
+};
+
+function verifiedTurnFor(session: { id: string; startedAt: Date }, turnId: string) {
+  return {
+    scope, sessionId: session.id, turnId, rootAgentId: "support-agent",
+    sessionStartedAt: session.startedAt.toISOString(),
+  };
+}
+```
+
+应用启动时把上面的配置和 `trustedHost` 交给 SDK。每轮调用前用 `verifiedTurnFor(session, turnId)` 得到 `verifiedTurn`，再按接入示例调用已有的 `agent.invoke`。
+
+Agent 按自己的配置管理模型供应商密钥。运行一轮 Agent 后，在 `/tracing/` 搜索该会话的 Session ID，打开 Trace 并切换到调用树查看父子 Span。
+
+### 重复验证
+
+Compose 就绪并完成 SDK 构建后，运行以下命令。测试用可控模型执行真实的登记和 OTLP/HTTP 上报，在 Chromium 中查询 Session 和 Trace，并校验调用树和凭据边界。测试输出可用于搜索的 Session ID。已有本机 Chromium 时可用 `DUBHE_TEST_CHROMIUM_PATH` 指定可执行文件。
+
+```sh
+npm --prefix packages/dubhe exec -- playwright install chromium
+npm --prefix packages/dubhe run test:compose
+```
+
+测试默认使用 [示例配置](config.example.yaml) 的作用域和 Agent ID。它读取根目录 `.env` 中的端口及三类本地凭据。如果修改了 YAML 中的凭据，请同步 `DUBHE_REGISTRATION_API_KEY`、`DUBHE_WORKLOAD_API_KEY` 和 `DUBHE_UI_READER_KEY`。
+
 ## TypeScript 和 Go 端到端验收
 
 准备 Node.js 24、Go 1.26 或更新版本和 C 编译器（SQLite 驱动使用 CGO）。验收入口在仓库根目录。

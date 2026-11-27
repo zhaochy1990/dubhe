@@ -1,0 +1,45 @@
+# geo stores a literal value, including dollar signs in the API key.
+geo $dubhe_reader_key {
+    default "${DUBHE_NGINX_READER_KEY}";
+}
+
+server {
+    listen 8080 default_server;
+    return 421;
+}
+
+server {
+    listen 8080;
+    server_name localhost 127.0.0.1;
+    absolute_redirect off;
+
+    # Resolve again when Compose replaces the Tracing container.
+    resolver 127.0.0.11 valid=5s ipv6=off;
+    set $tracing http://tracing:8080;
+
+    location = / {
+        return 302 /tracing/;
+    }
+
+    location = /tracing {
+        return 302 /tracing/;
+    }
+
+    location /tracing/ {
+        limit_except GET { deny all; }
+        proxy_set_header Authorization "";
+        proxy_set_header X-API-Key "";
+        proxy_pass $tracing;
+    }
+
+    location /v1/observability/ {
+        limit_except GET { deny all; }
+        proxy_set_header Authorization "";
+        proxy_set_header X-API-Key $dubhe_reader_key;
+        proxy_pass $tracing;
+    }
+
+    location / {
+        return 404;
+    }
+}

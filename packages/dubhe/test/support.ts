@@ -4,6 +4,7 @@ import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { AIMessage, type BaseMessage } from '@langchain/core/messages';
 import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
+import type { Page } from 'playwright';
 import {
   createHttpRunRegistration,
   createTracingSdk,
@@ -107,7 +108,7 @@ export class TestModel extends BaseChatModel {
 
 export function setup(
   otlpUrl = `${baseUrl}/v1/traces`,
-  delivery: Partial<Pick<TracingOptions, 'registration' | 'maxBufferedSpans' | 'captureModelInputs' | 'gatewayOrigins'>> = {},
+  delivery: Partial<Pick<TracingOptions, 'registration' | 'getOtlpHeaders' | 'maxBufferedSpans' | 'captureModelInputs' | 'gatewayOrigins'>> = {},
 ) {
   const bindings = new Map<string, VerifiedRun>();
   const outcomes = new Map<string, RunOutcome>();
@@ -115,7 +116,7 @@ export function setup(
     scope,
     producerId: 'agent-worker',
     otlpTraceEndpoint: otlpUrl,
-    getOtlpHeaders: async () => ({ 'X-API-Key': 'workload-token' }),
+    getOtlpHeaders: delivery.getOtlpHeaders ?? (async () => ({ 'X-API-Key': 'workload-token' })),
     host: {
       async prepareRun(candidate) {
         const key = JSON.stringify([candidate.sessionId, candidate.turnId]);
@@ -165,6 +166,14 @@ export interface Trace {
   run_state: RunOutcome | null;
   end_ns: number | null;
   nodes: Node[];
+}
+
+export async function readTraceTopology(page: Page) {
+  const nodes = page.locator('#trace-canvas button[data-node]');
+  await nodes.first().waitFor();
+  return nodes.evaluateAll((buttons) => buttons.map((button) => [
+    (button as HTMLElement).dataset.node, (button as HTMLElement).dataset.parentSpan || null,
+  ]));
 }
 
 export async function assertTrace(binding: VerifiedRun, outcome: RunOutcome | null): Promise<Trace> {
